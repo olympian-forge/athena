@@ -1,0 +1,22 @@
+name: Main Merge Gate
+
+# GitHub branch protection has no native "only allow PRs from branch X"
+# rule -- this is that restriction, implemented as a required check.
+# Only a PR whose source branch is exactly `dev` may merge into `main`.
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify-source-is-dev:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Ensure PR source branch is dev
+        run: |
+          if [ "${{ github.head_ref }}" != "dev" ]; then
+            echo "::error::Only 'dev' may be merged into 'main'. This PR's source branch is '${{ github.head_ref }}'."
+            exit 1
+          fi
