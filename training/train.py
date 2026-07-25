@@ -1,0 +1,362 @@
+#   Copyright (c) 2026 Ike
+#
+#   This program is free software: you can redistribute it and/or modify
+#   it under the terms of the GNU General Public License as published by
+#   the Free Software Foundation, either version 3 of the License, or
+#   (at your option) any later version.
+#
+#   This program is distributed in the hope that it will be useful,
+#   but WITHOUT ANY WARRANTY; without even the implied warranty of
+#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#   GNU General Public License for more details.
+#
+#   You should have received a copy of the GNU General Public License
+#   along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+import os
+import json
+import time
+import onnx
+import torch
+import torch.optim as optim
+import torch.nn.functional as F
+from torch.utils.data import Dataset, DataLoader
+from model import AlphaZeroNet, infer_value_channels
+
+# Map algebraic moves to AlphaZero 4672-channel actions
+# Takes the active turn side ('w' or 'b') to properly map string castling text
+def uci_to_index(uci_move, turn='w'):
+    uci_move = uci_move.strip()
+
+    # 1. Catch and translate literal algebraic castling strings
+    if uci_move == "O-O":
+        uci_move = "e1g1" if turn == 'w' else "e8g8"
+    elif uci_move == "O-O-O":
+        uci_move = "e1c1" if turn == 'w' else "e8c8"
+
+    # 2. Clean out any PGN capture markers (like 'x') or en passant markers that mess up indexing
+    uci_move = uci_move.replace("x", "").replace("e.p.", "")
+
+    # Absolute safety catch for malformed strings
+    if len(uci_move) < 4:
+        return 0
+
+    try:
+        from_file = ord(uci_move[0]) - ord('a')
+        from_rank = int(uci_move[1]) - 1
+        to_file = ord(uci_move[2]) - ord('a')
+        to_rank = int(uci_move[3]) - 1
+    except (ValueError, IndexError):
+        return 0 # Catch-all for any unparseable notation formats
+
+    # Ensure coordinates are within standard board boundaries
+    if not (0 <= from_file < 8 and 0 <= from_rank < 8 and 0 <= to_file < 8 and 0 <= to_rank < 8):
+        return 0
+
+    from_sq = from_rank * 8 + from_file
+    dx = to_file - from_file
+    dy = to_rank - from_rank
+
+    # 3. Determine promotions cleanly
+    promo = uci_move[4].lower() if len(uci_move) > 4 else None
+
+    # Explicitly check that the character is a legitimate chess piece token
+    if promo not in ['n', 'b', 'r', 'q']:
+        promo = None
+
+    channel = 0
+
+    # 1. Underpromotions (Knight, Bishop, Rook)
+    if promo and promo != 'q':
+        promo_dir = dx + 1
+        promo_type = {'n': 0, 'b': 1, 'r': 2}[promo]
+        channel = 64 + (promo_dir * 3) + promo_type
+
+    # 2. Knight moves
+    elif abs(dx) * abs(dy) == 2:
+        knight_lookups = [(1,2), (2,1), (2,-1), (1,-2), (-1,-2), (-2,-1), (-2,1), (-1,2)]
+        try:
+            channel = 56 + knight_lookups.index((dx, dy))
+        except ValueError:
+            channel = 0
+
+    # 3. Regular Moves (Queen moves / King moves / Pawn steps / Queen Promotions)
+    else:
+        step_x = 0 if dx == 0 else (1 if dx > 0 else -1)
+        step_y = 0 if dy == 0 else (1 if dy > 0 else -1)
+        distance = max(abs(dx), abs(dy))
+
+        # Explicit map matching the exact directional sequence of your C++ if/else chain
+        if   step_x ==  0 and step_y ==  1: dir_idx = 0 # N
+        elif step_x ==  1 and step_y ==  1: dir_idx = 1 # NE
+        elif step_x ==  1 and step_y ==  0: dir_idx = 2 # E
+        elif step_x ==  1 and step_y == -1: dir_idx = 3 # SE
+        elif step_x ==  0 and step_y == -1: dir_idx = 4 # S
+        elif step_x == -1 and step_y == -1: dir_idx = 5 # SW
+        elif step_x == -1 and step_y ==  0: dir_idx = 6 # W
+        elif step_x == -1 and step_y ==  1: dir_idx = 7 # NW
+        else: dir_idx = 0
+
+        channel = (dir_idx * 7) + (distance - 1)
+
+    return (from_sq * 73) + channel
+
+class ChessDataset(Dataset):
+    def __init__(self, data_dir):
+        self.data_dir = data_dir
+        self.samples = []
+        self.buffer = self.samples
+        # Archive every Nth consumed file (instead of deleting) so
+        # tools/data_health.py can analyze policy quality over the whole
+        # run; a 1-in-20 sample keeps disk use small. 0 disables archiving.
+        self.archive_every = int(os.environ.get("ARCHIVE_EVERY", "20"))
+        self.archive_dir = os.path.join(data_dir, "archive")
+        self.consumed_count = 0
+        self.load_data()
+
+    def update(self):
+        new_files_count = 0
+        if not os.path.exists(self.data_dir):
+            return 0
+
+        for filename in os.listdir(self.data_dir):
+            if filename.startswith("READY_") and filename.endswith(".jsonl"):
+                filepath = os.path.join(self.data_dir, filename)
+                try:
+                    with open(filepath, 'r') as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                data = json.loads(line)
+                                import chess
+                                chess.Board(data['fen']) # Validate FEN structure
+                                self.buffer.append(data)
+                            except (json.JSONDecodeError, ValueError):
+                                pass # Skip partially flushed lines or corrupted FENs
+                    self.consumed_count += 1
+                    if self.archive_every > 0 and self.consumed_count % self.archive_every == 0:
+                        os.makedirs(self.archive_dir, exist_ok=True)
+                        os.replace(filepath, os.path.join(self.archive_dir, filename))
+                    else:
+                        os.remove(filepath)
+                    new_files_count += 1
+                except Exception as e:
+                    print(f"Error reading {filename}: {e}")
+                    try:
+                        os.remove(filepath)
+                    except:
+                        pass
+
+        # Replay buffer: keep the freshest N positions. At production rates
+        # (~20k games/hr x ~30 positions) 2M spans roughly a 3-hour window;
+        # 500k was only ~45 minutes, too short a memory to train against.
+        buffer_size_limit = 2000000
+        if len(self.samples) > buffer_size_limit:
+            self.samples = self.samples[-buffer_size_limit:]
+            self.buffer = self.samples  # FIXED: Keep the reference pointer synchronized!
+
+        return new_files_count
+
+    def load_data(self):
+        self.update()
+
+    def fen_to_tensor(self, fen):
+        import chess
+        board = chess.Board(fen)
+        tensor = torch.zeros((14, 8, 8), dtype=torch.float32)
+
+        for square, piece in board.piece_map().items():
+            color_offset = 0 if piece.color == chess.WHITE else 6
+            piece_type_offset = piece.piece_type - 1
+            channel = color_offset + piece_type_offset
+
+            rank = chess.square_rank(square)
+            file = chess.square_file(square)
+            tensor[channel, rank, file] = 1.0
+
+        color_val = 1.0 if board.turn == chess.WHITE else -1.0
+        tensor[12, :, :] = color_val
+
+        castling_rights = fen.split(' ')[2]
+        castling_val = float(ord(castling_rights[0])) if len(castling_rights) > 0 else 0.0
+        tensor[13, :, :] = castling_val
+
+        return tensor
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        sample = self.samples[idx]
+        tensor = self.fen_to_tensor(sample['fen'])
+
+        # Set output tensor structure to AlphaZero standard 4,672
+        policy = torch.zeros(4672, dtype=torch.float32)
+        # policy_loss = F.cross_entropy(pred_policies, policies)
+
+        # Safely extract the current active turn from the FEN string to guide the castling parser
+        fen_parts = sample['fen'].split(' ')
+        turn_color = fen_parts[1] if len(fen_parts) > 1 else 'w'
+
+        # for move, prob in sample['policy'].items():
+        #     policy[uci_to_index(move, turn_color)] = prob
+
+        for move, prob in sample['policy'].items():
+            idx = uci_to_index(move, turn_color)
+            policy[idx] = prob
+
+        value = torch.tensor([sample['result']], dtype=torch.float32)
+        # Normalize result from [0, 1] to [-1, 1] for tanh
+        value = (value * 2) - 1
+
+        return tensor, policy, value
+
+def train():
+    try:
+        import torch_directml
+        has_dml = True
+    except ImportError:
+        has_dml = False
+
+    if has_dml and torch_directml.is_available():
+        device = torch_directml.device()
+    else:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    print(f"Using device: {device}")
+
+    # Build the model to match the checkpoint's value-head width so training
+    # resumes across a head migration; VALUE_CHANNELS sets it for a fresh
+    # start (3 = the width everything has been trained with so far).
+    checkpoint_path = "onnx/athena.pth"
+    checkpoint = None
+    if os.path.exists(checkpoint_path):
+        checkpoint = torch.load(checkpoint_path, weights_only=True)
+        value_channels = infer_value_channels(checkpoint)
+    else:
+        value_channels = int(os.environ.get("VALUE_CHANNELS", "3"))
+
+    model = AlphaZeroNet(value_channels=value_channels).to(device)
+    # Plain Adam with no weight_decay and no gradient clipping let parameter
+    # magnitudes drift upward for the run's whole ~338M-sample history (see
+    # policy_fc.weight's absmax: 33 -> 45 across five checks, value head
+    # weight norm 0.30 -> 1.00) until basic value calibration broke (a
+    # position up a whole queen scored negative). 1e-4 was tried first and
+    # confirmed (via tools/tune_weight_decay.py against real archived data)
+    # too weak at this lr to net decay at all -- breakeven is ~0.0022. 0.03
+    # gives a ~33k-step time constant (vs ~100k at the 0.01 default), pulling
+    # absmax down within a realistic training run, with no measured loss cost
+    # up to 0.1 in the offline sweep.
+    optimizer = optim.AdamW(model.parameters(), lr=0.001, weight_decay=0.03)
+
+    if checkpoint is not None:
+        print(f"Loading existing weights from {checkpoint_path} (value head width {value_channels})...")
+        model.load_state_dict(checkpoint)
+
+    # Path logic mirroring C++ output
+    data_dir = "data/selfplay/"
+
+    print(f"Watching directory for data: {data_dir}")
+
+    dataset = ChessDataset(data_dir)
+
+    # Every export makes every self-play worker hot-reload the ~86MB ONNX
+    # session; exporting after each cycle (observed: every ~8.5s under load)
+    # taxes the whole fleet. Gate exports to a minimum interval instead.
+    export_interval_seconds = float(os.environ.get("EXPORT_INTERVAL_SECONDS", "60"))
+    last_export_time = 0.0
+
+    while True:
+        new_files = dataset.update()
+        if len(dataset) < 4096 or new_files == 0:
+            print(f"Waiting for new data... Buffer size: {len(dataset)}. New files: {new_files}")
+            time.sleep(1)
+            continue
+
+        dataloader = DataLoader(dataset, batch_size=4096, shuffle=True)
+
+        model.train()
+        total_loss = 0
+        batches_processed = 0
+
+        # Prevent massive overfitting by doing a maximum of 50 random batches per update
+        for batch_idx, (tensors, policies, values) in enumerate(dataloader):
+            if batches_processed >= 50:
+                break
+
+            tensors, policies, values = tensors.to(device), policies.to(device), values.to(device)
+
+            optimizer.zero_grad()
+
+            pred_policies, pred_values = model(tensors)
+
+            # policy_loss = -torch.sum(policies * F.log_softmax(pred_policies, dim=1), dim=1).mean()
+            policy_loss = F.cross_entropy(pred_policies, policies)
+            value_loss = F.mse_loss(pred_values, values)
+
+            loss = policy_loss + value_loss
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+            optimizer.step()
+
+            total_loss += loss.item()
+            batches_processed += 1
+
+        avg_loss = total_loss / max(1, batches_processed)
+        print(f"Training cycle finished. Loss: {avg_loss:.4f} (over {batches_processed} batches)")
+
+        if time.time() - last_export_time < export_interval_seconds:
+            continue
+        last_export_time = time.time()
+
+        # Export back to ONNX for C++ Engine atomically
+        dummy_input = torch.randn(1, 14, 8, 8, device=device)
+        onnx_tmp_path = "onnx/athena.onnx.tmp"
+        onnx_path = "onnx/athena.onnx"
+        torch.onnx.export(
+            model,
+            dummy_input,
+            onnx_tmp_path,
+            export_params=True,
+            opset_version=14,
+            do_constant_folding=True,
+            input_names=['input'],
+            output_names=['policy', 'value'],
+            dynamic_axes={'input': {0: 'batch_size'},
+                          'policy': {0: 'batch_size'},
+                          'value': {0: 'batch_size'}}
+        )
+        # The engine builds its ONNX Runtime session from a memory buffer, so
+        # it cannot resolve external-data references — but PyTorch >= 2.9
+        # writes weights to a side-car .onnx.data by default, leaving a graph
+        # file of a few hundred KB that loads as nothing. Consolidate into one
+        # self-contained file BEFORE the atomic swap, so a model the engine
+        # cannot read never becomes the live one.
+        onnx.save_model(onnx.load(onnx_tmp_path), onnx_tmp_path, save_as_external_data=False)
+        sidecar = onnx_tmp_path + ".data"
+        if os.path.exists(sidecar):
+            os.remove(sidecar)
+
+        exported_mb = os.path.getsize(onnx_tmp_path) / (1024 * 1024)
+        if exported_mb < 10:
+            # Keep serving the previous model rather than a weightless one.
+            print(f"WARNING: ONNX export produced only {exported_mb:.1f} MB (weights missing); "
+                  f"keeping the previous {onnx_path}")
+            os.remove(onnx_tmp_path)
+        else:
+            while True:
+                try:
+                    os.replace(onnx_tmp_path, onnx_path)
+                    break
+                except PermissionError:
+                    time.sleep(0.01)
+
+        # Save PyTorch checkpoint for resuming
+        torch.save(model.state_dict(), "onnx/athena.pth")
+        print(f"Exported updated weights to {onnx_path} and onnx/athena.pth")
+
+
+if __name__ == "__main__":
+    train()

@@ -1,0 +1,10 @@
+prefix=@PREFIX@
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: athena
+Description: Production-grade Chess Rules Library
+Version: @ATHENA_VERSION@
+Libs: -L${libdir} -lathena
+Cflags: -I${includedir}/athena

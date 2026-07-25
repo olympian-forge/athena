@@ -1,0 +1,73 @@
+name: CI
+
+# dev is the integration branch; main only ever receives merges from dev
+# (enforced via branch protection, not here). Every push to dev and every
+# PR targeting dev has to prove the engine still builds, all unit tests
+# pass, and move generation is still mathematically correct before it can
+# land.
+on:
+  push:
+    branches: [dev]
+  pull_request:
+    branches: [dev]
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-perft:
+    name: Build, unit tests, and perft correctness
+    runs-on: ubuntu-24.04 # pinned (not ubuntu-latest) so the C++20/GCC 13+ floor is deterministic
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        # pciutils: CMakeLists.txt shells out to lspci for GPU vendor
+        # detection (see ai/AI_CONTEXT.md) -- without it, it assumes NVIDIA
+        # and tries to fetch a CUDA build that can't run here anyway.
+        # libgtest-dev: headers + CMake sources only, no prebuilt .a files
+        # (see next step).
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pciutils libgtest-dev
+
+      - name: Build and install GoogleTest static libraries
+        # Ubuntu's libgtest-dev package doesn't ship prebuilt binaries, so
+        # find_package(GTest REQUIRED) has nothing to link against until
+        # these are built once and installed -- same step the project's own
+        # devcontainer runs for local dev (.devcontainer/scripts/setup.sh).
+        run: |
+          cd /usr/src/googletest
+          sudo cmake .
+          sudo make
+          sudo find . -name "*.a" -exec cp {} /usr/lib/ \;
+
+      - name: Build and run unit tests
+        # Reuses the project's own build+test script rather than
+        # duplicating its cmake invocation here -- same command a
+        # contributor runs locally, so a green check here means the same
+        # thing as a green run on their machine. Fails (via `set -e`) on
+        # any build error or any failing GTest case.
+        run: ./scripts/test.sh
+
+      - name: Run perft correctness suite
+        # tools/perft.py itself never sets a non-zero exit code on a
+        # mismatch -- it just writes PASS/FAIL rows to PERFT_RESULTS.md --
+        # so the mismatch check below is what actually fails this job.
+        run: |
+          python3 tools/perft.py
+          cat PERFT_RESULTS.md
+          if grep -q "FAIL" PERFT_RESULTS.md; then
+            echo "::error::Perft mismatch detected -- move generation is no longer mathematically correct. See PERFT_RESULTS.md above."
+            exit 1
+          fi
+
+      - name: Upload perft results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perft-results
+          path: PERFT_RESULTS.md

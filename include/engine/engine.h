@@ -1,0 +1,146 @@
+/*
+ *   Copyright (c) 2026 Ike
+ *
+ *   This program is free software: you can redistribute it and/or modify
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation, either version 3 of the License, or
+ *   (at your option) any later version.
+ *
+ *   This program is distributed in the hope that it will be useful,
+ *   but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *   GNU General Public License for more details.
+ *
+ *   You should have received a copy of the GNU General Public License
+ *   along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+#pragma once
+
+#include "include/chess/board.h"
+#include "include/core/core.h"
+#include "include/logger/logger.h"
+#include "include/chess/moves.h"
+#include "include/utils/utils.h"
+#include "include/abstract/board.h"
+
+namespace chess
+{
+
+    class ATHENA_API Engine final
+    {
+        static constexpr const char *DEFAULT_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+        std::string fen;
+        Board board;
+
+        std::vector<UndoState> undo_stack;
+
+    public:
+        Engine(const std::string &fen_string = DEFAULT_FEN);
+        ~Engine();
+
+        /**
+         * @brief Generate all legal moves for the side to move.
+         * @returns Vector of all legal moves in the current position.
+         */
+        std::vector<Move> generate_all_moves();
+
+        /**
+         * @brief Generate all legal moves for a piece at a specific square.
+         * @param algebraic_address Square in algebraic notation (e.g., "e2").
+         * @returns Vector of legal moves for the piece on that square.
+         */
+        std::vector<Move> generate_moves(const std::string &algebraic_address);
+
+        /**
+         * @brief Get a const view of the board for inspection (e.g., by evaluators).
+         * @returns Const reference to the AbstractBoard interface.
+         */
+        const AbstractBoard &get_board_view() const;
+
+        /**
+         * @brief Get FEN notation of current board position.
+         * @returns Full FEN string.
+         */
+        std::string get_fen(void);
+
+        /**
+         * @brief Get the undo-state history of all moves made on this engine.
+         * @returns Const reference to the undo stack, oldest state first.
+         */
+        const std::vector<UndoState> &get_history() const { return undo_stack; }
+
+        /**
+         * @brief Seed this engine's undo-state history from another engine,
+         * so repetition detection in get_terminal_state() can see positions
+         * that occurred before this engine's starting FEN (e.g., search
+         * threads inheriting the game history).
+         * @param history Undo states to copy in, oldest first.
+         */
+        void set_history(const std::vector<UndoState> &history) { undo_stack = history; }
+
+        /**
+         * @brief Get combined terminal state information in a single query.
+         * @returns TerminalState struct with is_terminal flag and game score.
+         */
+        struct TerminalState
+        {
+            bool is_terminal;
+            double score;
+        };
+        TerminalState get_terminal_state();
+
+        /**
+         * @brief Check if current position is checkmate.
+         * @returns True if the side to move is in checkmate, false otherwise.
+         */
+        bool is_checkmate();
+
+        /**
+         * @brief Check if current position is a draw (50-move rule or stalemate).
+         * @returns True if game is drawn, false otherwise.
+         */
+        bool is_draw();
+
+        /**
+         * @brief Check if current position is stalemate.
+         * @returns True if the side to move is stalemated, false otherwise.
+         */
+        bool is_stalemate();
+
+        /**
+         * @brief Make a move on the board with full validation.
+         * @param move Move to apply.
+         */
+        void make_move(const Move &move);
+
+        /**
+         * @brief Make a move without legality validation (for performance-critical
+         * search paths). Undo state is still recorded; passing a move that is
+         * not legal in the current position corrupts the board.
+         * @param move Move to apply. Must be legal.
+         */
+        void make_move_fast(const Move &move);
+
+        /**
+         * @brief Print the current board state in text format.
+         */
+        void print_board(void) const;
+
+        /**
+         * @brief Reset the board to the starting position.
+         */
+        void reset();
+
+        /**
+         * @brief Undo the last move made.
+         */
+        void undo_move();
+
+        /**
+         * @brief Get the library version string.
+         * @returns Version string (e.g., "0.3.0").
+         */
+        static const char *version();
+    };
+}
