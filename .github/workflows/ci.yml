@@ -53,6 +53,20 @@ jobs:
         # any build error or any failing GTest case.
         run: ./scripts/test.sh
 
+      - name: Rebuild perft in Release mode
+        # scripts/test.sh above configures Debug (matches local dev
+        # convention for the unit tests), but Debug is unoptimized --
+        # perft's node counts (up to 193M at the deeper reference
+        # positions) take dramatically longer to generate under Debug
+        # for zero correctness benefit, since node counts are identical
+        # between Debug and Release and only speed differs. Reconfigure
+        # the same build dir and rebuild just the perft target; the
+        # runtime output directory is bin/ regardless of config, so this
+        # replaces the Debug bin/perft in place.
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --target perft -j
+
       - name: Run perft correctness suite
         # tools/perft.py itself never sets a non-zero exit code on a
         # mismatch -- it just writes PASS/FAIL rows to PERFT_RESULTS.md --
