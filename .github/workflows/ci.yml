@@ -1,15 +1,15 @@
 name: CI
 
 # dev is the integration branch; main only ever receives merges from dev
-# (enforced via branch protection, not here). Every push to dev and every
-# PR targeting dev has to prove the engine still builds, all unit tests
-# pass, and move generation is still mathematically correct before it can
-# land.
+# (enforced via branch protection + main-merge-gate.yml). Every push to
+# dev, every PR targeting dev, and every release PR from dev into main
+# has to prove the engine still builds, all unit tests pass, and move
+# generation is still mathematically correct before it can land.
 on:
   push:
-    branches: [dev]
+    branches: [dev, main]
   pull_request:
-    branches: [dev]
+    branches: [dev, main]
 
 permissions:
   contents: read
