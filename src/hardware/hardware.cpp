@@ -34,12 +34,9 @@
 #include <dxgi.h>
 #pragma comment(lib, "dxgi.lib")
 #elif defined(__linux__)
-#include <sys/sysinfo.h>
-#include <sys/utsname.h>
+#include "include/hardware/platform.h"
 #include <fstream>
-#include <cstdio>
 #include <sched.h>
-#include <string>
 #elif defined(__APPLE__)
 #include <sys/types.h>
 #include <sys/sysctl.h>
@@ -304,6 +301,13 @@ namespace hardware
     uint32_t convert_bytes_to_gb(uint64_t bytes) { return static_cast<uint32_t>(bytes / BYTES_PER_GB) + 1; }
 
     /**
+     * @brief Utility to convert Gigabytes (GB) into bytes.
+     * @param gb Number of Gigabytes (GB) to convert.
+     * @returns Capacity in bytes.
+     */
+    uint64_t convert_gb_to_bytes(uint32_t gb) { return static_cast<uint64_t>(gb) * BYTES_PER_GB; }
+
+    /**
      * @brief Detects the effective CPU allowance of this process (affinity
      * mask and cgroup v1/v2 quotas), which containers cap well below the
      * physical core count reported by /proc/cpuinfo.
@@ -374,6 +378,9 @@ namespace hardware
      */
     HostInfo detect_host_info()
     {
+#ifdef __linux__
+        return HostInfo(platform::get_cpus(), platform::get_gpus(), platform::get_ram(), platform::get_os());
+#else
         uint32_t logical_cores = std::thread::hardware_concurrency();
         if (logical_cores == 0)
             logical_cores = 4;
@@ -387,21 +394,6 @@ namespace hardware
         {
             cpu_model = proc_id;
             free(proc_id);
-        }
-#elif defined(__linux__)
-        std::ifstream cpuinfo("/proc/cpuinfo");
-        std::string line;
-        while (std::getline(cpuinfo, line))
-        {
-            if (line.find("model name") != std::string::npos)
-            {
-                auto pos = line.find(":");
-                if (pos != std::string::npos)
-                {
-                    cpu_model = line.substr(pos + 2);
-                    break;
-                }
-            }
         }
 #elif defined(__APPLE__)
         char buffer[256];
@@ -422,12 +414,6 @@ namespace hardware
         {
             sys_total_ram = memInfo.ullTotalPhys;
         }
-#elif defined(__linux__)
-        struct sysinfo memInfo;
-        if (sysinfo(&memInfo) == 0)
-        {
-            sys_total_ram = static_cast<uint64_t>(memInfo.totalram) * memInfo.mem_unit;
-        }
 #elif defined(__APPLE__)
         uint64_t mem;
         size_t len = sizeof(mem);
@@ -441,8 +427,6 @@ namespace hardware
         std::string os_name = "Unknown";
 #ifdef _WIN32
         os_name = "Windows";
-#elif defined(__linux__)
-        os_name = "Linux";
 #elif defined(__APPLE__)
         os_name = "macOS";
 #endif
@@ -476,100 +460,10 @@ namespace hardware
             }
             pFactory->Release();
         }
-#elif defined(__linux__)
-        FILE *pipe = popen("nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader 2>/dev/null", "r");
-        if (pipe)
-        {
-            char buffer[256];
-            while (fgets(buffer, sizeof(buffer), pipe) != nullptr)
-            {
-                std::string line = buffer;
-                size_t first_comma = line.find(',');
-                size_t second_comma = line.find(',', first_comma + 1);
-                if (first_comma != std::string::npos && second_comma != std::string::npos)
-                {
-                    try
-                    {
-                        int id = std::stoi(line.substr(0, first_comma));
-                        std::string name = line.substr(first_comma + 2, second_comma - first_comma - 2);
-                        std::string vram_str = line.substr(second_comma + 2);
-                        uint64_t vram_mb = std::stoull(vram_str);
-                        uint64_t vram_bytes = vram_mb * 1024ULL * 1024ULL;
-                        gpus.emplace_back(Gpu(id, name, vram_bytes, vram_bytes));
-                    }
-                    catch (...)
-                    {
-                    }
-                }
-            }
-            pclose(pipe);
-        }
-
-        if (gpus.empty())
-        {
-            pipe = popen("rocm-smi --showproductname --showmeminfo vram --csv 2>/dev/null", "r");
-            if (pipe)
-            {
-                char buffer[256];
-                int device_id = 0;
-                while (fgets(buffer, sizeof(buffer), pipe) != nullptr)
-                {
-                    std::string line = buffer;
-                    if (line.find("card") == 0)
-                    {
-                        size_t first_comma = line.find(',');
-                        size_t second_comma = line.find(',', first_comma + 1);
-                        if (first_comma != std::string::npos && second_comma != std::string::npos)
-                        {
-                            try
-                            {
-                                std::string name = line.substr(first_comma + 1, second_comma - first_comma - 1);
-                                std::string vram_str = line.substr(second_comma + 1);
-                                uint64_t vram_bytes = std::stoull(vram_str);
-                                gpus.emplace_back(Gpu(device_id++, name, vram_bytes, vram_bytes));
-                            }
-                            catch (...)
-                            {
-                            }
-                        }
-                    }
-                }
-                pclose(pipe);
-            }
-        }
-
-        if (gpus.empty())
-        {
-            pipe = popen("lspci 2>/dev/null", "r");
-            if (pipe)
-            {
-                char buffer[256];
-                int device_id = 0;
-                while (fgets(buffer, sizeof(buffer), pipe) != nullptr)
-                {
-                    std::string lower_line = buffer;
-                    std::transform(lower_line.begin(), lower_line.end(), lower_line.begin(), [](unsigned char c)
-                                   { return static_cast<char>(::tolower(c)); });
-                    if (lower_line.find("vga") != std::string::npos || lower_line.find("3d controller") != std::string::npos)
-                    {
-                        std::string name = "Generic Linux GPU";
-                        std::string orig_line = buffer;
-                        size_t colon = orig_line.find(": ");
-                        if (colon != std::string::npos && colon + 2 < orig_line.length())
-                        {
-                            name = orig_line.substr(colon + 2);
-                            name.erase(name.find_last_not_of(" \n\r\t") + 1);
-                        }
-                        uint64_t estimated_vram = 1024ULL * 1024ULL * 1024ULL;
-                        gpus.emplace_back(Gpu(device_id++, name, estimated_vram, estimated_vram));
-                    }
-                }
-                pclose(pipe);
-            }
-        }
 #endif
 
         return HostInfo(cpus, gpus, sys_ram, sys_os);
+#endif
     }
 }
 

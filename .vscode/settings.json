@@ -91,5 +91,6 @@
         "editor.insertSpaces": false,
         "editor.tabSize": 4
     },
-    "todo-tree.ripgrep.ripgrep": "/usr/bin/rg"
+    "todo-tree.ripgrep.ripgrep": "/usr/bin/rg",
+    "editor.fontLigatures": true
 }

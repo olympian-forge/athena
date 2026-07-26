@@ -296,6 +296,12 @@ if (ENABLE_AUTOTUNE)
     target_compile_definitions(athena_core PUBLIC ENABLE_AUTOTUNE_FLAG)
 endif()
 
+# Platform-specific hardware detection (see include/hardware/platform.h) --
+# windows.cpp / macos.cpp land the same way once split out of hardware.cpp.
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_sources(athena_core PRIVATE src/hardware/linux.cpp src/hardware/posix.cpp)
+endif()
+
 target_compile_definitions(athena_core PRIVATE
     ATHENA_VERSION="${ATHENA_VERSION}"
 )
