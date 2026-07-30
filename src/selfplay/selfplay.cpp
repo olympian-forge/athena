@@ -142,9 +142,6 @@ namespace chess
 
             while (moves_played < 200)
             {
-                /* One combined terminal query instead of is_checkmate() +
-                 * is_stalemate() + is_draw(), which each regenerate all
-                 * legal moves for the position. */
                 if (engine.get_terminal_state().is_terminal)
                     break;
 
@@ -152,12 +149,17 @@ namespace chess
 
                 auto [best_move, raw_policy] = search->find_best_move_with_policy(engine, simulations, apply_noise);
 
+                /*
+                 * The loop condition already excluded terminal positions, so
+                 * the search always returns at least one scored move.
+                 */
                 if (raw_policy.empty())
-                    break;
+                    break; // LCOV_EXCL_LINE
 
                 std::vector<Move> legal_moves = engine.generate_all_moves();
+                /* Same contradiction: not terminal, yet no legal moves. */
                 if (legal_moves.empty())
-                    break;
+                    break; // LCOV_EXCL_LINE
 
                 std::vector<std::pair<Move, double>> legal_policy;
                 double legal_sum = 0.0;
@@ -181,6 +183,12 @@ namespace chess
                     }
                 }
 
+                /*
+                 * The search scores only its own children, which are generated
+                 * from the same legal move list, so the intersection is never
+                 * empty. Uniform fallback kept in case that ever diverges.
+                 */
+                // LCOV_EXCL_START
                 if (legal_policy.empty())
                 {
                     for (const auto &lm : legal_moves)
@@ -189,6 +197,7 @@ namespace chess
                     }
                     legal_sum = 1.0;
                 }
+                // LCOV_EXCL_STOP
 
                 for (auto &p : legal_policy)
                 {

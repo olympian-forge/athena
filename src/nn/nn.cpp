@@ -352,9 +352,13 @@ namespace nn
 
         std::error_code error_code;
         auto write_time = std::filesystem::last_write_time(onnx_file_path, error_code);
+        /*
+         * exists() succeeded immediately above, so a stat failure here needs the
+         * file to vanish between the two calls -- not reproducible on demand.
+         */
         if (error_code)
         {
-            return;
+            return; // LCOV_EXCL_LINE
         }
 
         if (write_time > last_model_load_time || !session)
@@ -374,9 +378,13 @@ namespace nn
                 }
                 file.seekg(0, std::ios::beg);
                 std::vector<char> temp_buffer(static_cast<size_t>(size));
+                /*
+                 * The stream opened and reported a positive size, so a short
+                 * read needs the file truncated mid-call.
+                 * */
                 if (!file.read(temp_buffer.data(), size))
                 {
-                    return;
+                    return; // LCOV_EXCL_LINE
                 }
 
                 Ort::SessionOptions session_options;
@@ -398,23 +406,61 @@ namespace nn
                      * typically don't surface stderr, so without this the
                      * fallback was invisible -- logger:: persists to
                      * logs/athena.log regardless of who owns the console,
-                     * matching the CUDA path below. */
-                    logger::CRITICAL(error);
+                     * matching the CUDA path below. WARN, not CRITICAL:
+                     * running on CPU is a supported configuration, not a
+                     * fault, and CRITICAL should stay meaningful. */
+                    logger::WARN(error);
                 }
 #else
-                try
+                /* CPU-only ONNX Runtime packages ship no CUDA provider at all,
+                 * so appending it can only throw. Asking the build what it
+                 * actually has avoids a guaranteed-failing call plus its error
+                 * spew on every session creation. This is the cheap half of
+                 * issue #12 -- it does not yet check whether the *machine* has
+                 * an NVIDIA GPU, only whether this build could use one. */
+                bool cuda_provider_available = false;
+                for (const std::string &provider : Ort::GetAvailableProviders())
                 {
-                    OrtCUDAProviderOptions cuda_options;
-                    cuda_options.device_id = gpu;
-                    session_options.AppendExecutionProvider_CUDA(cuda_options);
+                    if (provider == "CUDAExecutionProvider")
+                    {
+                        /*
+                         * only reached when the linked ONNX
+                         * Runtime build shipped a CUDA provider. CI's runner has
+                         * no GPU, so CMake's vendor detection (see CMakeLists.txt)
+                         * fetches the plain "linux-x64" CPU-only asset every time
+                         * ("ONNX Runtime: latest GitHub release is v1.28.0 (GPU
+                         * vendor: NONE...)" in the CI log), which never lists
+                         * this provider. A real NVIDIA machine's build takes this
+                         * branch; no CI build ever will.
+                         */
+                        // LCOV_EXCL_START
+                        cuda_provider_available = true;
+                        break;
+                        // LCOV_EXCL_STOP
+                    }
                 }
-                catch (const std::exception &e)
+
+                /*
+                 * same reason: unreachable without a CUDA-enabled ONNX Runtime build, which CI never has.
+                 */
+                // LCOV_EXCL_START
+                if (cuda_provider_available)
                 {
-                    std::string error = "Could not enable CUDA for GPU " + std::to_string(gpu) + ". Falling back to CPU.";
-                    error += "ONNX Runtime error: " + std::string(e.what());
-                    std::cerr << error << "\n";
-                    logger::CRITICAL(error);
+                    try
+                    {
+                        OrtCUDAProviderOptions cuda_options;
+                        cuda_options.device_id = gpu;
+                        session_options.AppendExecutionProvider_CUDA(cuda_options);
+                    }
+                    catch (const std::exception &e)
+                    {
+                        std::string error = "Could not enable CUDA for GPU " + std::to_string(gpu) + ". Falling back to CPU. ";
+                        error += "ONNX Runtime error: " + std::string(e.what());
+                        std::cerr << error << "\n";
+                        logger::WARN(error);
+                    }
                 }
+                // LCOV_EXCL_STOP
 #endif
 
                 session.reset();
