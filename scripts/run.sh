@@ -22,7 +22,7 @@ PROJECT_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
 
 build_project() {
     echo "Cleaning and building the project..."
-    (cd "$PROJECT_ROOT" && rm -rf build && cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build)
+    (cd "$PROJECT_ROOT" && rm -rf build && cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j $(nproc))
 }
 
 run_engine() {
