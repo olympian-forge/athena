@@ -378,8 +378,10 @@ namespace nn
                 }
                 file.seekg(0, std::ios::beg);
                 std::vector<char> temp_buffer(static_cast<size_t>(size));
-                /* The stream opened and reported a positive size, so a short
-                 * read needs the file truncated mid-call. */
+                /*
+                 * The stream opened and reported a positive size, so a short
+                 * read needs the file truncated mid-call.
+                 * */
                 if (!file.read(temp_buffer.data(), size))
                 {
                     return; // LCOV_EXCL_LINE
@@ -421,11 +423,27 @@ namespace nn
                 {
                     if (provider == "CUDAExecutionProvider")
                     {
+                        /*
+                         * only reached when the linked ONNX
+                         * Runtime build shipped a CUDA provider. CI's runner has
+                         * no GPU, so CMake's vendor detection (see CMakeLists.txt)
+                         * fetches the plain "linux-x64" CPU-only asset every time
+                         * ("ONNX Runtime: latest GitHub release is v1.28.0 (GPU
+                         * vendor: NONE...)" in the CI log), which never lists
+                         * this provider. A real NVIDIA machine's build takes this
+                         * branch; no CI build ever will.
+                         */
+                        // LCOV_EXCL_START
                         cuda_provider_available = true;
                         break;
+                        // LCOV_EXCL_STOP
                     }
                 }
 
+                /*
+                 * same reason: unreachable without a CUDA-enabled ONNX Runtime build, which CI never has.
+                 */
+                // LCOV_EXCL_START
                 if (cuda_provider_available)
                 {
                     try
@@ -442,6 +460,7 @@ namespace nn
                         logger::WARN(error);
                     }
                 }
+                // LCOV_EXCL_STOP
 #endif
 
                 session.reset();
