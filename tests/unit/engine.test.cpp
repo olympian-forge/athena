@@ -450,6 +450,31 @@ TEST_F(EngineTest, IsDraw_ThreefoldRepetition)
     EXPECT_TRUE(e.is_draw());
 }
 
+/**
+ * get_terminal_state() carries its own copy of the threefold-repetition
+ * check, separate from is_draw()'s -- the same shape as the duplicated
+ * castle-legality logic elsewhere in this file, so it needs its own test
+ * rather than relying on is_draw() to exercise both.
+ */
+TEST_F(EngineTest, GetTerminalStateDetectsThreefoldRepetition)
+{
+    chess::Engine e;
+    EXPECT_FALSE(e.get_terminal_state().is_terminal);
+
+    e.make_move(chess::Move("g1", "f3"));
+    e.make_move(chess::Move("g8", "f6"));
+    e.make_move(chess::Move("f3", "g1"));
+    e.make_move(chess::Move("f6", "g8"));
+    e.make_move(chess::Move("g1", "f3"));
+    e.make_move(chess::Move("g8", "f6"));
+    e.make_move(chess::Move("f3", "g1"));
+    e.make_move(chess::Move("f6", "g8"));
+
+    chess::Engine::TerminalState state = e.get_terminal_state();
+    EXPECT_TRUE(state.is_terminal);
+    EXPECT_DOUBLE_EQ(state.score, 0.5);
+}
+
 TEST_F(EngineTest, MakeMoveFast)
 {
     engine.make_move_fast(chess::Move("e2", "e4"));
