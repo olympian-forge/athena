@@ -116,9 +116,11 @@ namespace mcts
         {
             original_prior_sum += child->prior;
         }
-        /* expand() leaves priors as a normalized softmax, so the sum is
+        /*
+         * expand() leaves priors as a normalized softmax, so the sum is
          * positive whenever there are children. Kept as a divide-by-zero
-         * guard against a future prior scheme. */
+         * guard against a future prior scheme.
+         */
         if (original_prior_sum <= 0.0)
             original_prior_sum = 1.0; // LCOV_EXCL_LINE
 
@@ -131,8 +133,10 @@ namespace mcts
             noise.push_back(n);
             noise_sum += n;
         }
-        /* A gamma draw summing to zero across every child is not attainable
-         * in practice; guard retained for the divide below. */
+        /*
+         * A gamma draw summing to zero across every child is not attainable
+         * in practice; guard retained for the divide below.
+         */
         if (noise_sum <= 0.0)
             noise_sum = 1.0; // LCOV_EXCL_LINE
 
@@ -196,8 +200,10 @@ namespace mcts
                         return PIECE_VALUE_QUEEN;
                     case 'k':
                         return PIECE_VALUE_KING;
-                    // LCOV_EXCL_START -- captures and promotions always carry
-                    // one of the six piece letters above.
+                    /*
+                     * captures and promotions always carry one of the six piece letters above.
+                     */
+                    // LCOV_EXCL_START
                     default:
                         return 0.0;
                         // LCOV_EXCL_STOP
@@ -654,8 +660,10 @@ namespace mcts
                 {
                     Node *next_node = node->select_child();
 
-                    /* select_child only returns null with no children, which
-                     * the loop condition has already excluded. */
+                    /*
+                     * select_child only returns null with no children, which
+                     * the loop condition has already excluded.
+                     */
                     if (!next_node)
                         break; // LCOV_EXCL_LINE
 
@@ -746,8 +754,10 @@ namespace mcts
         while (!engine.is_checkmate() && !engine.is_stalemate() && !engine.is_draw() && moves_played < MAX_ROLLOUT_MOVES)
         {
             std::vector<chess::Move> legal_moves = engine.generate_all_moves();
-            /* The loop condition already excluded checkmate and stalemate, so
-             * an empty move list here would be a contradiction. */
+            /*
+             * The loop condition already excluded checkmate and stalemate, so
+             * an empty move list here would be a contradiction.
+             */
             if (legal_moves.empty())
                 break; // LCOV_EXCL_LINE
 

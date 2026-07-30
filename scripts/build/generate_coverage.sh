@@ -126,7 +126,7 @@ echo "📈 Coverage report generated in $COVERAGE_REPORT"
 echo ""
 
 # Generate per-file coverage table
-scripts/build/generate_coverage_table.sh "$COVERAGE_INFO" "$DEBUG_DIR"
+scripts/build/generate_coverage_table.sh "$COVERAGE_INFO"
 
 # Check for 100% coverage
 total_cov=$(lcov --summary "$COVERAGE_INFO" 2>/dev/null | grep 'lines.*:' | awk '{print $2}' | tr -d '%')
