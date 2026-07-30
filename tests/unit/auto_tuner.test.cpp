@@ -15,18 +15,33 @@
  *   along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#pragma once
-#include "include/hardware/hardware.h"
+#include <gtest/gtest.h>
+#include <cstdio>
+#include "include/tuner/auto_tuner.h"
+#include "include/tuner/tuning_parameters.h"
 
-namespace hardware::platform
+class AutoTunerTest : public ::testing::Test
 {
-    std::vector<Cpu> get_cpus();
+protected:
+    void SetUp() override { std::remove("athena.cfg"); }
 
-    uint32_t get_effective_cpu_limit();
+    void TearDown() override { std::remove("athena.cfg"); }
+};
 
-    std::vector<Gpu> get_gpus();
+/* ------------------------------------------------------- construction --- */
 
-    OperatingSystem get_os();
+TEST_F(AutoTunerTest, ConstructsFromTuningParameters)
+{
+    tuner::TuningParameters params(false);
+    tuner::AutoTuner tuner_instance(params);
 
-    Ram get_ram();
+    SUCCEED();
+}
+
+TEST_F(AutoTunerTest, ConstructsWithUsageCaps)
+{
+    tuner::TuningParameters params(false);
+    tuner::AutoTuner tuner_instance(params, 80.0, 50.0);
+
+    SUCCEED();
 }

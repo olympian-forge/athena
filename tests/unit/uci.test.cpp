@@ -76,3 +76,86 @@ TEST(UCITest, LoopCommandsTimeManagement) {
     EXPECT_TRUE(output.find("bestmove") != std::string::npos);
 }
 
+
+/**
+ * winc/binc are parsed only when present; the earlier tests never send them,
+ * so the increment branches stay unexercised without this.
+ */
+TEST(UCITest, GoParsesClockIncrements) {
+    std::istringstream in("position startpos\ngo wtime 60000 btime 60000 winc 1000 binc 1000\nquit\n");
+    std::ostringstream out;
+    std::streambuf* cinbuf = std::cin.rdbuf();
+    std::streambuf* coutbuf = std::cout.rdbuf();
+    std::cin.rdbuf(in.rdbuf());
+    std::cout.rdbuf(out.rdbuf());
+
+    UCI uci;
+    uci.loop();
+
+    std::cin.rdbuf(cinbuf);
+    std::cout.rdbuf(coutbuf);
+
+    EXPECT_TRUE(out.str().find("bestmove") != std::string::npos);
+}
+
+/**
+ * An illegal move in a position command must abort the rest of the move list
+ * rather than silently desyncing the board from the GUI.
+ */
+TEST(UCITest, PositionStopsAtIllegalMove) {
+    std::istringstream in("position startpos moves e2e4 e7e5 a1a8 g1f3\ngo nodes 5\nquit\n");
+    std::ostringstream out;
+    std::streambuf* cinbuf = std::cin.rdbuf();
+    std::streambuf* coutbuf = std::cout.rdbuf();
+    std::cin.rdbuf(in.rdbuf());
+    std::cout.rdbuf(out.rdbuf());
+
+    UCI uci;
+    uci.loop();
+
+    std::cin.rdbuf(cinbuf);
+    std::cout.rdbuf(coutbuf);
+
+    EXPECT_TRUE(out.str().find("illegal move") != std::string::npos);
+}
+
+/* The literal "moves" token is a separator and must be skipped, not applied. */
+TEST(UCITest, PositionFenWithMovesToken) {
+    std::istringstream in("position fen rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1 moves e2e4\ngo nodes 5\nquit\n");
+    std::ostringstream out;
+    std::streambuf* cinbuf = std::cin.rdbuf();
+    std::streambuf* coutbuf = std::cout.rdbuf();
+    std::cin.rdbuf(in.rdbuf());
+    std::cout.rdbuf(out.rdbuf());
+
+    UCI uci;
+    uci.loop();
+
+    std::cin.rdbuf(cinbuf);
+    std::cout.rdbuf(coutbuf);
+
+    EXPECT_TRUE(out.str().find("bestmove") != std::string::npos);
+}
+
+/**
+ * A repeated "moves" token is skipped rather than treated as a move. Malformed
+ * GUI input is the only way to reach that guard, since the fen parser stops at
+ * the first "moves" and startpos consumes it.
+ */
+TEST(UCITest, PositionSkipsRepeatedMovesToken) {
+    std::istringstream in("position startpos moves e2e4 moves e7e5\ngo nodes 5\nquit\n");
+    std::ostringstream out;
+    std::streambuf* cinbuf = std::cin.rdbuf();
+    std::streambuf* coutbuf = std::cout.rdbuf();
+    std::cin.rdbuf(in.rdbuf());
+    std::cout.rdbuf(out.rdbuf());
+
+    UCI uci;
+    uci.loop();
+
+    std::cin.rdbuf(cinbuf);
+    std::cout.rdbuf(coutbuf);
+
+    EXPECT_TRUE(out.str().find("bestmove") != std::string::npos);
+    EXPECT_TRUE(out.str().find("illegal move") == std::string::npos);
+}

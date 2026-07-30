@@ -461,3 +461,127 @@ TEST_F(EngineTest, MakeMoveFast)
     utils::parse_algebraic_notation("e2", rank, file);
     EXPECT_EQ(engine.get_board_view().get_piece(rank, file), '\0');
 }
+
+/* ------------------------------------------- terminal and castle rules --- */
+
+/**
+ * The fifty-move rule is expressed as a half-move clock of 100; a FEN can
+ * start there directly rather than playing out a hundred quiet moves.
+ */
+TEST_F(EngineTest, FiftyMoveRuleIsTerminalDraw)
+{
+    chess::Engine drawn("8/8/4k3/8/8/4K3/8/8 w - - 100 120");
+
+    chess::Engine::TerminalState state = drawn.get_terminal_state();
+
+    EXPECT_TRUE(state.is_terminal);
+    EXPECT_DOUBLE_EQ(state.score, 0.5);
+}
+
+TEST_F(EngineTest, FreshPositionIsNotTerminal)
+{
+    EXPECT_FALSE(engine.get_terminal_state().is_terminal);
+}
+
+/**
+ * Castling out of check is illegal, so with the king attacked neither castle
+ * may survive legality filtering even though both are pseudo-legal.
+ */
+TEST_F(EngineTest, CastlingWhileInCheckIsFiltered)
+{
+    chess::Engine both_available("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1");
+    /* Black rook on e8 rakes the empty e-file, so white's king is in check. */
+    chess::Engine checked("4r2k/8/8/8/8/8/8/R3K2R w KQ - 0 1");
+
+    for (const chess::Move &move : checked.generate_all_moves())
+    {
+        EXPECT_NE(move.get_move_type(), chess::MoveType::CASTLE_KINGSIDE);
+        EXPECT_NE(move.get_move_type(), chess::MoveType::CASTLE_QUEENSIDE);
+    }
+
+    /* Sanity: with no attack on the king both castles are available. */
+    bool kingside = false;
+    bool queenside = false;
+    for (const chess::Move &move : both_available.generate_all_moves())
+    {
+        if (move.get_move_type() == chess::MoveType::CASTLE_KINGSIDE)
+            kingside = true;
+        if (move.get_move_type() == chess::MoveType::CASTLE_QUEENSIDE)
+            queenside = true;
+    }
+    EXPECT_TRUE(kingside);
+    EXPECT_TRUE(queenside);
+}
+
+/**
+ * A king may not pass through an attacked square. A rook bearing on f1 kills
+ * kingside castling while leaving queenside legal, and vice versa on d1.
+ */
+TEST_F(EngineTest, CastlingThroughAttackedSquareIsFiltered)
+{
+    /* Rook on f8 covers f1, the square the king crosses when castling short. */
+    chess::Engine f_file("k4r2/8/8/8/8/8/8/R3K2R w KQ - 0 1");
+    bool kingside = false;
+    for (const chess::Move &move : f_file.generate_all_moves())
+    {
+        if (move.get_move_type() == chess::MoveType::CASTLE_KINGSIDE)
+            kingside = true;
+    }
+    EXPECT_FALSE(kingside);
+
+    /* Rook on d8 covers d1, crossed when castling long. */
+    chess::Engine d_file("3r3k/8/8/8/8/8/8/R3K2R w KQ - 0 1");
+    bool queenside = false;
+    for (const chess::Move &move : d_file.generate_all_moves())
+    {
+        if (move.get_move_type() == chess::MoveType::CASTLE_QUEENSIDE)
+            queenside = true;
+    }
+    EXPECT_FALSE(queenside);
+}
+
+/*
+ * generate_moves(square) carries its own copy of the castle-legality checks,
+ * separate from the copy inside generate_all_moves, so the single-square
+ * entry point has to be exercised directly as well.
+ */
+
+TEST_F(EngineTest, SingleSquareGeneratorFiltersCastlingWhileInCheck)
+{
+    chess::Engine checked("4r2k/8/8/8/8/8/8/R3K2R w KQ - 0 1");
+
+    for (const chess::Move &move : checked.generate_moves("e1"))
+    {
+        EXPECT_NE(move.get_move_type(), chess::MoveType::CASTLE_KINGSIDE);
+        EXPECT_NE(move.get_move_type(), chess::MoveType::CASTLE_QUEENSIDE);
+    }
+}
+
+TEST_F(EngineTest, SingleSquareGeneratorFiltersCastlingThroughAttackedSquare)
+{
+    chess::Engine f_file("k4r2/8/8/8/8/8/8/R3K2R w KQ - 0 1");
+    bool kingside = false;
+    bool queenside = false;
+    for (const chess::Move &move : f_file.generate_moves("e1"))
+    {
+        if (move.get_move_type() == chess::MoveType::CASTLE_KINGSIDE)
+            kingside = true;
+        if (move.get_move_type() == chess::MoveType::CASTLE_QUEENSIDE)
+            queenside = true;
+    }
+    EXPECT_FALSE(kingside);
+    EXPECT_TRUE(queenside);
+
+    chess::Engine d_file("3r3k/8/8/8/8/8/8/R3K2R w KQ - 0 1");
+    kingside = false;
+    queenside = false;
+    for (const chess::Move &move : d_file.generate_moves("e1"))
+    {
+        if (move.get_move_type() == chess::MoveType::CASTLE_KINGSIDE)
+            kingside = true;
+        if (move.get_move_type() == chess::MoveType::CASTLE_QUEENSIDE)
+            queenside = true;
+    }
+    EXPECT_TRUE(kingside);
+    EXPECT_FALSE(queenside);
+}

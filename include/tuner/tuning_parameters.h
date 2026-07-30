@@ -39,6 +39,27 @@ namespace tuner
         std::optional<hardware::HostInfo> host_info;
         uint16_t pipeline_target = 0;
         uint8_t search_threads = 0;
+        uint32_t detected_cpu_limit = 0;
+
+        /**
+         * @brief Pure batch-size decision: picks a per-GPU batch from average
+         * VRAM, scales by GPU count, and floors the result at what the search
+         * threads alone need.
+         * @param gpu_count Number of GPUs to size for; 0 selects the CPU default.
+         * @param total_vram_in_bytes Summed VRAM across those GPUs.
+         * @param search_threads Threads the search will run.
+         * @returns The calculated batch size.
+         */
+        static uint16_t decide_batch_size(uint8_t gpu_count, uint64_t total_vram_in_bytes, uint8_t search_threads);
+
+        /**
+         * @brief Pure search-thread decision: clamps the core count to the
+         * effective allowance, then leaves headroom for other work.
+         * @param cores Logical cores the machine reports.
+         * @param effective_cpu_limit Cores this process may use; 0 means no limit.
+         * @returns The calculated number of threads.
+         */
+        static uint8_t decide_search_threads(uint8_t cores, uint32_t effective_cpu_limit);
 
         /**
          * @brief Computes optimal inference batch size based on available GPU count and VRAM.
@@ -64,6 +85,16 @@ namespace tuner
          * @param load_from_file If true, the constructor attempts to parse athena.cfg for custom parameters.
          */
         TuningParameters(bool load_from_file = true);
+
+        /**
+         * @brief Constructs TuningParameters from a supplied hardware profile
+         * instead of detecting one, so sizing can be exercised against machine
+         * shapes the running host does not have (multi-GPU, many-core).
+         * @param detected_host_info The hardware profile to size against.
+         * @param effective_cpu_limit Cores this process may actually use; 0
+         * means no limit was detected.
+         */
+        TuningParameters(const hardware::HostInfo &detected_host_info, uint32_t effective_cpu_limit);
 
         /**
          * @brief Destructs the TuningParameters object.

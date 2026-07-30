@@ -297,9 +297,12 @@ if (ENABLE_AUTOTUNE)
 endif()
 
 # Platform-specific hardware detection (see include/hardware/platform.h) --
-# windows.cpp / macos.cpp land the same way once split out of hardware.cpp.
+# macos.cpp lands the same way once split out of hardware.cpp.
 if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_sources(athena_core PRIVATE src/hardware/linux.cpp src/hardware/posix.cpp)
+elseif (CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    target_sources(athena_core PRIVATE src/hardware/windows.cpp)
+    target_link_libraries(athena_core PRIVATE dxgi)
 endif()
 
 target_compile_definitions(athena_core PRIVATE
@@ -376,6 +379,11 @@ if(ENABLE_TESTING)
         tests/unit/nn.test.cpp
         tests/unit/uci.test.cpp
         tests/unit/selfplay.test.cpp
+        tests/unit/hardware.test.cpp
+        tests/unit/tuning_parameters.test.cpp
+        tests/unit/utilization.test.cpp
+        tests/unit/auto_tuner.test.cpp
+        $<$<PLATFORM_ID:Linux>:${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/linux.test.cpp>
     )
 
     target_link_libraries(tests PRIVATE
@@ -387,33 +395,48 @@ if(ENABLE_TESTING)
 
     target_compile_options(tests PRIVATE ${COMMON_WARNING_FLAGS})
 
-    # Set specific output directory for test executable to match Make
-    set_target_properties(tests PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/bint/unit
-    )
+    # No RUNTIME_OUTPUT_DIRECTORY override here: CMAKE_RUNTIME_OUTPUT_DIRECTORY_<CONFIG>
+    # is set above for every config, and the per-config property takes precedence
+    # over the plain one -- so an override here would be silently ignored and only
+    # mislead about where bin/tests actually lands.
 
-    # Enable coverage flags
-    target_compile_options(athena_core PRIVATE -fprofile-arcs -ftest-coverage)
-    target_link_options(athena_core PRIVATE -fprofile-arcs -ftest-coverage)
+    # Coverage instrumentation is gcov-only, so it is skipped under MSVC:
+    # -fprofile-arcs and friends are not MSVC flags and the build would fail
+    # to configure. Windows builds compile and run the same unit tests without
+    # coverage; the 100% gate is enforced on Linux, which builds every
+    # non-Windows code path.
+    #
+    # -fprofile-update=atomic: Athena runs parallel MCTS search and self-play
+    # worker threads, and gcov's default counter updates are not thread safe.
+    # Without this, concurrent increments are lost and the profile comes out
+    # self-contradictory -- a guarded line reporting fewer executions than the
+    # line it guards -- which surfaces as lines that genuinely ran being
+    # reported as never executed.
+    if(NOT MSVC)
+        set(ATHENA_COVERAGE_FLAGS -fprofile-arcs -ftest-coverage -fprofile-update=atomic)
 
-    target_compile_options(athena PRIVATE -fprofile-arcs -ftest-coverage)
-    target_link_options(athena PRIVATE -fprofile-arcs -ftest-coverage)
+        target_compile_options(athena_core PRIVATE ${ATHENA_COVERAGE_FLAGS})
+        target_link_options(athena_core PRIVATE ${ATHENA_COVERAGE_FLAGS})
 
-    # perft links athena_core too, so it needs the same gcov instrumentation
-    # flags at link time or __gcov_init/__gcov_exit/__gcov_merge_add are
-    # left undefined (athena_core's object files were compiled with them).
-    target_compile_options(perft PRIVATE -fprofile-arcs -ftest-coverage)
-    target_link_options(perft PRIVATE -fprofile-arcs -ftest-coverage)
+        target_compile_options(athena PRIVATE ${ATHENA_COVERAGE_FLAGS})
+        target_link_options(athena PRIVATE ${ATHENA_COVERAGE_FLAGS})
 
-    target_compile_options(tests PRIVATE -fprofile-arcs -ftest-coverage)
-    target_link_options(tests PRIVATE -fprofile-arcs -ftest-coverage)
+        # perft links athena_core too, so it needs the same gcov instrumentation
+        # flags at link time or __gcov_init/__gcov_exit/__gcov_merge_add are
+        # left undefined (athena_core's object files were compiled with them).
+        target_compile_options(perft PRIVATE ${ATHENA_COVERAGE_FLAGS})
+        target_link_options(perft PRIVATE ${ATHENA_COVERAGE_FLAGS})
 
-    # 4. Coverage Custom Target (always runs generate_coverage.sh)
-    add_custom_target(coverage
-        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/scripts/build/generate_coverage.sh
-        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-        COMMENT "Running tests, generating coverage report and enforcing 100% policy..."
-    )
+        target_compile_options(tests PRIVATE ${ATHENA_COVERAGE_FLAGS})
+        target_link_options(tests PRIVATE ${ATHENA_COVERAGE_FLAGS})
+
+        # 4. Coverage Custom Target (always runs generate_coverage.sh)
+        add_custom_target(coverage
+            COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/scripts/build/generate_coverage.sh
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+            COMMENT "Running tests, generating coverage report and enforcing 100% policy..."
+        )
+    endif()
 endif()
 
 # 5. Installation Rules

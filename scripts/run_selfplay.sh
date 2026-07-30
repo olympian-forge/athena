@@ -28,6 +28,7 @@
 
 # CWD-independent, matching run.sh/test.sh/shakedown.sh: everything below
 # is written relative to the repo root, not wherever this was invoked from.
+
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
 cd "$PROJECT_ROOT"

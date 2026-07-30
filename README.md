@@ -17,7 +17,7 @@ diagnosing/benchmarking the result.
 [![Build](https://img.shields.io/badge/Build-CMake-blue.svg)](https://cmake.org/)
 [![Testing](https://img.shields.io/badge/Testing-Google%20Test-red.svg)](https://github.com/google/googletest)
 [![Coverage](https://img.shields.io/badge/Coverage-100%25-brightgreen.svg)]()
-[![Tests](https://img.shields.io/badge/Tests-381%20registered-success.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-498%20registered-success.svg)]()
 
 > **Current Status**: Version 0.3.2. Full legal move enforcement (check
 > detection, castling, promotion, pinned pieces, checkmate/stalemate) is
