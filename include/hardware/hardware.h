@@ -41,7 +41,6 @@ namespace hardware
     enum class OperatingSystemType
     {
         LINUX,
-        MACOS,
         WINDOWS
     };
 

@@ -116,8 +116,11 @@ namespace mcts
         {
             original_prior_sum += child->prior;
         }
+        /* expand() leaves priors as a normalized softmax, so the sum is
+         * positive whenever there are children. Kept as a divide-by-zero
+         * guard against a future prior scheme. */
         if (original_prior_sum <= 0.0)
-            original_prior_sum = 1.0;
+            original_prior_sum = 1.0; // LCOV_EXCL_LINE
 
         double noise_sum = 0.0;
         std::vector<double> noise;
@@ -128,8 +131,10 @@ namespace mcts
             noise.push_back(n);
             noise_sum += n;
         }
+        /* A gamma draw summing to zero across every child is not attainable
+         * in practice; guard retained for the divide below. */
         if (noise_sum <= 0.0)
-            noise_sum = 1.0;
+            noise_sum = 1.0; // LCOV_EXCL_LINE
 
         for (size_t i = 0; i < children.size(); ++i)
         {
@@ -191,8 +196,11 @@ namespace mcts
                         return PIECE_VALUE_QUEEN;
                     case 'k':
                         return PIECE_VALUE_KING;
+                    // LCOV_EXCL_START -- captures and promotions always carry
+                    // one of the six piece letters above.
                     default:
                         return 0.0;
+                        // LCOV_EXCL_STOP
                     }
                 };
 
@@ -646,8 +654,10 @@ namespace mcts
                 {
                     Node *next_node = node->select_child();
 
+                    /* select_child only returns null with no children, which
+                     * the loop condition has already excluded. */
                     if (!next_node)
-                        break;
+                        break; // LCOV_EXCL_LINE
 
                     node = next_node;
                     guards.emplace_back(node);
@@ -736,8 +746,10 @@ namespace mcts
         while (!engine.is_checkmate() && !engine.is_stalemate() && !engine.is_draw() && moves_played < MAX_ROLLOUT_MOVES)
         {
             std::vector<chess::Move> legal_moves = engine.generate_all_moves();
+            /* The loop condition already excluded checkmate and stalemate, so
+             * an empty move list here would be a contradiction. */
             if (legal_moves.empty())
-                break;
+                break; // LCOV_EXCL_LINE
 
             std::uniform_int_distribution<size_t> dist(0, legal_moves.size() - 1);
             engine.make_move_fast(legal_moves[dist(local_rng)]);

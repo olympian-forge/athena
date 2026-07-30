@@ -1,15 +1,11 @@
 name: CI
 
-# dev is the integration branch; main only ever receives merges from dev
-# (enforced via branch protection + main-merge-gate.yml). Every push to
-# dev, every PR targeting dev, and every release PR from dev into main
-# has to prove the engine still builds, all unit tests pass, and move
-# generation is still mathematically correct before it can land.
 on:
   push:
     branches: [dev, main]
   pull_request:
     branches: [dev, main]
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
@@ -18,6 +14,7 @@ jobs:
   build-test-perft:
     name: Build, unit tests, and perft correctness
     runs-on: ubuntu-24.04 # pinned (not ubuntu-latest) so the C++20/GCC 13+ floor is deterministic
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     env:
       DEBIAN_FRONTEND: noninteractive
     steps:
@@ -25,52 +22,33 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install system dependencies
-        # pciutils: CMakeLists.txt shells out to lspci for GPU vendor
-        # detection (see ai/AI_CONTEXT.md) -- without it, it assumes NVIDIA
-        # and tries to fetch a CUDA build that can't run here anyway.
-        # libgtest-dev: headers + CMake sources only, no prebuilt .a files
-        # (see next step).
         run: |
           sudo apt-get update
-          sudo apt-get install -y pciutils libgtest-dev
+          sudo apt-get install -y pciutils libgtest-dev lcov
 
       - name: Build and install GoogleTest static libraries
-        # Ubuntu's libgtest-dev package doesn't ship prebuilt binaries, so
-        # find_package(GTest REQUIRED) has nothing to link against until
-        # these are built once and installed -- same step the project's own
-        # devcontainer runs for local dev (.devcontainer/scripts/setup.sh).
         run: |
           cd /usr/src/googletest
           sudo cmake .
           sudo make
           sudo find . -name "*.a" -exec cp {} /usr/lib/ \;
 
-      - name: Build and run unit tests
-        # Reuses the project's own build+test script rather than
-        # duplicating its cmake invocation here -- same command a
-        # contributor runs locally, so a green check here means the same
-        # thing as a green run on their machine. Fails (via `set -e`) on
-        # any build error or any failing GTest case.
+      - name: Build, run unit tests, and enforce 100% coverage
         run: ./scripts/test.sh
 
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: .coverage/report
+
       - name: Rebuild perft in Release mode
-        # scripts/test.sh above configures Debug (matches local dev
-        # convention for the unit tests), but Debug is unoptimized --
-        # perft's node counts (up to 193M at the deeper reference
-        # positions) take dramatically longer to generate under Debug
-        # for zero correctness benefit, since node counts are identical
-        # between Debug and Release and only speed differs. Reconfigure
-        # the same build dir and rebuild just the perft target; the
-        # runtime output directory is bin/ regardless of config, so this
-        # replaces the Debug bin/perft in place.
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --target perft -j
 
       - name: Run perft correctness suite
-        # tools/perft.py itself never sets a non-zero exit code on a
-        # mismatch -- it just writes PASS/FAIL rows to PERFT_RESULTS.md --
-        # so the mismatch check below is what actually fails this job.
         run: |
           python3 tools/perft.py
           cat PERFT_RESULTS.md

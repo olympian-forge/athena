@@ -20,12 +20,17 @@
 
 namespace hardware::platform::posix
 {
+    /* Pure I/O boundary: spawns a command and collects its stdout. Kept
+     * small enough to verify by reading; excluded from coverage because the
+     * only ways to exercise its failure paths are fork/descriptor exhaustion
+     * or a production seam, and neither is worth having. */
+
+    // LCOV_EXCL_START
     std::vector<std::string> get_command_stdout(const char *command)
     {
         std::vector<std::string> output;
 
         FILE *pipe = popen(command, "r");
-
         if (!pipe)
         {
             return output;
@@ -40,4 +45,5 @@ namespace hardware::platform::posix
         pclose(pipe);
         return output;
     }
+    // LCOV_EXCL_STOP
 }

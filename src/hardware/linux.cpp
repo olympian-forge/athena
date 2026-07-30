@@ -17,9 +17,11 @@
 
 #include "include/logger/logger.h"
 #include "include/hardware/platform.h"
+#include "src/hardware/linux_internal.h"
 #include "include/hardware/posix.h"
 #include <cctype>
 #include <fstream>
+#include <sched.h>
 #include <set>
 #include <sys/sysinfo.h>
 #include <thread>
@@ -33,17 +35,20 @@ namespace hardware::platform
     constexpr const char *AMD_QUERY_CARD_IDENTIFIER = "card";
     constexpr const char *LSPCI_GPU_QUERY_CMD = "lspci 2>/dev/null";
     constexpr const char *NVIDIA_GPU_QUERY_CMD = "nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader 2>/dev/null";
+    constexpr const char *PROC_CPUINFO_PATH = "/proc/cpuinfo";
+    constexpr const char *CGROUP_V1_PERIOD_PATH = "/sys/fs/cgroup/cpu/cpu.cfs_period_us";
+    constexpr const char *CGROUP_V1_QUOTA_PATH = "/sys/fs/cgroup/cpu/cpu.cfs_quota_us";
+    constexpr const char *CGROUP_V2_CPU_MAX_PATH = "/sys/fs/cgroup/cpu.max";
+    constexpr const char *CGROUP_V2_UNLIMITED_QUOTA = "max";
 
     /**
      * Reads /proc/cpuinfo/ to find the corresponding number of cores on a CPU.
      * Matches pairs of physical core id and core id preceding it. For systems
      * that do not have this information, defaults to 1 logical core per physical
      * core.
-     * @returns void
      */
-    void find_and_extract_cpus(std::vector<Cpu> &cpus)
+    void parse_cpuinfo(std::istream &input, uint32_t logical_cores, std::vector<Cpu> &cpus)
     {
-        uint32_t logical_cores = std::thread::hardware_concurrency();
         if (logical_cores == 0)
         {
             logical_cores = DEFAULT_CPU_CORES;
@@ -53,9 +58,8 @@ namespace hardware::platform
         int current_physical_id = 0;
         std::string model_name = "Not available";
 
-        std::ifstream cpuinfo("/proc/cpuinfo");
         std::string line;
-        while (std::getline(cpuinfo, line))
+        while (std::getline(input, line))
         {
             size_t colon = line.find(":");
             if (colon == std::string::npos || colon + 2 > line.length())
@@ -103,12 +107,11 @@ namespace hardware::platform
      * Leverage the ROCm toolkit to get information about the GPU. Parse if data
      * is found, return nothing if not.
      */
-    void find_and_extract_amd_gpus(std::vector<Gpu> &gpus)
+    void parse_amd_gpus(const std::vector<std::string> &lines, std::vector<Gpu> &gpus)
     {
-        std::vector<std::string> command_lines = posix::get_command_stdout(AMD_GPU_QUERY_CMD);
         uint8_t device_id = 0;
 
-        for (const std::string &line : command_lines)
+        for (const std::string &line : lines)
         {
             if (line.find(AMD_QUERY_CARD_IDENTIFIER) == 0)
             {
@@ -137,12 +140,10 @@ namespace hardware::platform
      * Leverage the lspci posix utility to get information about graphics controllers.
      * Parse if data is found, return nothing if not.
      */
-    void find_and_extract_generic_gpus(std::vector<Gpu> &gpus)
+    void parse_generic_gpus(const std::vector<std::string> &lines, std::vector<Gpu> &gpus)
     {
-        std::vector<std::string> command_lines = posix::get_command_stdout(LSPCI_GPU_QUERY_CMD);
-
         uint8_t device_id = 0;
-        for (const std::string &line : command_lines)
+        for (const std::string &line : lines)
         {
             std::string lower_line = line;
             for (char &c : lower_line)
@@ -169,11 +170,9 @@ namespace hardware::platform
      * Leverage the nvidia-smi toolkit to get information about the GPU. Parse if data
      * is found; return nothing if not.
      */
-    void find_and_extract_nvidia_gpus(std::vector<Gpu> &gpus)
+    void parse_nvidia_gpus(const std::vector<std::string> &lines, std::vector<Gpu> &gpus)
     {
-        std::vector<std::string> command_lines = posix::get_command_stdout(NVIDIA_GPU_QUERY_CMD);
-
-        for (const std::string &line : command_lines)
+        for (const std::string &line : lines)
         {
             size_t first_comma = line.find(',');
             size_t second_comma = line.find(',', first_comma + 1);
@@ -197,35 +196,123 @@ namespace hardware::platform
         }
     }
 
+    /**
+     * Keeps the tightest of the candidate limits seen so far. A candidate of
+     * zero means that source found no limit and is ignored.
+     * @returns void
+     */
+    void consider_cpu_limit(uint32_t &limit, uint64_t candidate)
+    {
+        if (candidate > 0 && (limit == 0 || candidate < limit))
+        {
+            limit = static_cast<uint32_t>(candidate);
+        }
+    }
+
+    /**
+     * Reads the cgroup v2 quota, where "cpu.max" holds "<quota_us> <period_us>"
+     * or "max <period_us>" when the group is unlimited.
+     * @returns void
+     */
+    void parse_cgroup_v2_quota(std::istream &input, uint32_t &limit)
+    {
+        std::string quota_str;
+        uint64_t period = 0;
+        if ((input >> quota_str >> period) && quota_str != CGROUP_V2_UNLIMITED_QUOTA && period > 0)
+        {
+            try
+            {
+                uint64_t quota = std::stoull(quota_str);
+                consider_cpu_limit(limit, (quota + period - 1) / period);
+            }
+            catch (const std::exception &)
+            {
+            }
+        }
+    }
+
+    /**
+     * Reads the cgroup v1 quota, where a quota of -1 means unlimited. Quotas
+     * are rounded up to whole cores.
+     * @returns void
+     */
+    void parse_cgroup_v1_quota(std::istream &quota_input, std::istream &period_input, uint32_t &limit)
+    {
+        long long quota = 0;
+        long long period = 0;
+        if ((quota_input >> quota) && (period_input >> period) && quota > 0 && period > 0)
+        {
+            consider_cpu_limit(limit, static_cast<uint64_t>((quota + period - 1) / period));
+        }
+    }
+
+    // LCOV_EXCL_START
+
+    /**
+     * Reads the affinity mask of this process, which respects taskset pinning
+     * and container cpusets.
+     */
+    void read_affinity_cpu_limit(uint32_t &limit)
+    {
+        cpu_set_t mask;
+        CPU_ZERO(&mask);
+        if (sched_getaffinity(0, sizeof(mask), &mask) == 0)
+        {
+            int count = CPU_COUNT(&mask);
+            if (count > 0)
+            {
+                consider_cpu_limit(limit, static_cast<uint64_t>(count));
+            }
+        }
+    }
+
     std::vector<Cpu> get_cpus()
     {
         std::vector<Cpu> cpus;
+        std::ifstream cpuinfo(PROC_CPUINFO_PATH);
 
-        find_and_extract_cpus(cpus);
+        parse_cpuinfo(cpuinfo, std::thread::hardware_concurrency(), cpus);
 
         return cpus;
     }
 
+    uint32_t get_effective_cpu_limit()
+    {
+        uint32_t limit = 0;
+
+        read_affinity_cpu_limit(limit);
+
+        std::ifstream cpu_max(CGROUP_V2_CPU_MAX_PATH);
+        parse_cgroup_v2_quota(cpu_max, limit);
+
+        std::ifstream quota_file(CGROUP_V1_QUOTA_PATH);
+        std::ifstream period_file(CGROUP_V1_PERIOD_PATH);
+        parse_cgroup_v1_quota(quota_file, period_file, limit);
+
+        return limit;
+    }
+
+    /**
+     * Walks the GPU query tiers in order, stopping at the first that reports a
+     * device: the vendor tools give exact names and VRAM, lspci only an estimate.
+     */
     std::vector<Gpu> get_gpus()
     {
         std::vector<Gpu> gpus;
 
-        find_and_extract_nvidia_gpus(gpus);
-
+        parse_nvidia_gpus(posix::get_command_stdout(NVIDIA_GPU_QUERY_CMD), gpus);
         if (!gpus.empty())
         {
             return gpus;
         }
 
-        find_and_extract_amd_gpus(gpus);
-
+        parse_amd_gpus(posix::get_command_stdout(AMD_GPU_QUERY_CMD), gpus);
         if (!gpus.empty())
         {
             return gpus;
         }
 
-        find_and_extract_generic_gpus(gpus);
-
+        parse_generic_gpus(posix::get_command_stdout(LSPCI_GPU_QUERY_CMD), gpus);
         return gpus;
     }
 
@@ -244,4 +331,6 @@ namespace hardware::platform
         }
         return Ram(total_ram);
     }
+
+    // LCOV_EXCL_STOP
 }

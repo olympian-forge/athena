@@ -44,12 +44,26 @@ echo "📊 Generating coverage report..."
 
 # Run tests first
 mkdir -p onnx
-cp tests/dummy.onnx onnx/athena.onnx
+# tests/dummy.onnx is the tiny generated fixture (tools/make_test_model.py)
+# that lets nn.test.cpp reach NN's successful-model-load path. Install it only
+# when no model is present: a contributor's real onnx/athena.onnx is ~82 MB and
+# may hold trained weights, so a test run must never clobber it.
+if [ ! -f onnx/athena.onnx ] && [ -f tests/dummy.onnx ]; then
+    cp tests/dummy.onnx onnx/athena.onnx
+fi
+
+# Reset execution counters. .gcda files accumulate across runs, and once a
+# binary is rebuilt its checksum no longer matches the leftover data, so
+# libgcov discards counts mid-run ("overwriting an existing profile data with
+# a different checksum") and lines that genuinely ran get reported as missed.
+# Without this the result depends on whatever the previous build left behind.
+echo "🧹 Resetting coverage counters..."
+find . -name "*.gcda" -delete 2>/dev/null || true
 
 echo "🧪 Running tests..."
-bint/unit/tests
+bin/tests
 # Run perft with split FEN to cover FEN reconstruction logic and depth > 1 to cover loop body
-bin/perft 2 rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1
+bin/perft 2 "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 # Run perft without arguments to cover usage logic
 bin/perft || true
 
