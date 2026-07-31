@@ -48,6 +48,8 @@ namespace logger
         void log(const std::string &message, LEVEL level,
                  std::source_location location = std::source_location::current()) const;
 
+        void flush() const;
+
         void shutdown() const;
     };
 
