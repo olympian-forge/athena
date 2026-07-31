@@ -17,7 +17,7 @@
 
 #include "include/logger/logger.h"
 #include "include/hardware/platform.h"
-#include "src/hardware/linux_internal.h"
+#include "include/hardware/internal/linux.h"
 #include "include/hardware/posix.h"
 #include <cctype>
 #include <fstream>
@@ -40,13 +40,10 @@ namespace hardware::platform
     constexpr const char *CGROUP_V1_QUOTA_PATH = "/sys/fs/cgroup/cpu/cpu.cfs_quota_us";
     constexpr const char *CGROUP_V2_CPU_MAX_PATH = "/sys/fs/cgroup/cpu.max";
     constexpr const char *CGROUP_V2_UNLIMITED_QUOTA = "max";
+    constexpr const char *CGROUP_V1_MEMORY_LIMIT_PATH = "/sys/fs/cgroup/memory/memory.limit_in_bytes";
+    constexpr const char *CGROUP_V2_MEMORY_MAX_PATH = "/sys/fs/cgroup/memory.max";
+    constexpr uint64_t CGROUP_V1_MEMORY_UNLIMITED_SENTINEL = 9223372036854771712ULL;
 
-    /**
-     * Reads /proc/cpuinfo/ to find the corresponding number of cores on a CPU.
-     * Matches pairs of physical core id and core id preceding it. For systems
-     * that do not have this information, defaults to 1 logical core per physical
-     * core.
-     */
     void parse_cpuinfo(std::istream &input, uint32_t logical_cores, std::vector<Cpu> &cpus)
     {
         if (logical_cores == 0)
@@ -103,10 +100,6 @@ namespace hardware::platform
         cpus.emplace_back(Cpu(logical_cores, model_name, physical_core_count));
     }
 
-    /**
-     * Leverage the ROCm toolkit to get information about the GPU. Parse if data
-     * is found, return nothing if not.
-     */
     void parse_amd_gpus(const std::vector<std::string> &lines, std::vector<Gpu> &gpus)
     {
         uint8_t device_id = 0;
@@ -129,17 +122,13 @@ namespace hardware::platform
                     catch (const std::exception &e)
                     {
                         std::string what = static_cast<std::string>(e.what());
-                        logger::WARN("AMD GPUs found, but data could not be parsed. Exception: " + what);
+                        logger::warn("AMD GPUs found, but data could not be parsed. Exception: " + what);
                     }
                 }
             }
         }
     }
 
-    /**
-     * Leverage the lspci posix utility to get information about graphics controllers.
-     * Parse if data is found, return nothing if not.
-     */
     void parse_generic_gpus(const std::vector<std::string> &lines, std::vector<Gpu> &gpus)
     {
         uint8_t device_id = 0;
@@ -166,10 +155,6 @@ namespace hardware::platform
         }
     }
 
-    /**
-     * Leverage the nvidia-smi toolkit to get information about the GPU. Parse if data
-     * is found; return nothing if not.
-     */
     void parse_nvidia_gpus(const std::vector<std::string> &lines, std::vector<Gpu> &gpus)
     {
         for (const std::string &line : lines)
@@ -190,17 +175,12 @@ namespace hardware::platform
                 catch (const std::exception &e)
                 {
                     std::string what = static_cast<std::string>(e.what());
-                    logger::WARN("NVIDIA GPUs found, but data could not be parsed. Exception: " + what);
+                    logger::warn("NVIDIA GPUs found, but data could not be parsed. Exception: " + what);
                 }
             }
         }
     }
 
-    /**
-     * Keeps the tightest of the candidate limits seen so far. A candidate of
-     * zero means that source found no limit and is ignored.
-     * @returns void
-     */
     void consider_cpu_limit(uint32_t &limit, uint64_t candidate)
     {
         if (candidate > 0 && (limit == 0 || candidate < limit))
@@ -209,11 +189,6 @@ namespace hardware::platform
         }
     }
 
-    /**
-     * Reads the cgroup v2 quota, where "cpu.max" holds "<quota_us> <period_us>"
-     * or "max <period_us>" when the group is unlimited.
-     * @returns void
-     */
     void parse_cgroup_v2_quota(std::istream &input, uint32_t &limit)
     {
         std::string quota_str;
@@ -231,11 +206,6 @@ namespace hardware::platform
         }
     }
 
-    /**
-     * Reads the cgroup v1 quota, where a quota of -1 means unlimited. Quotas
-     * are rounded up to whole cores.
-     * @returns void
-     */
     void parse_cgroup_v1_quota(std::istream &quota_input, std::istream &period_input, uint32_t &limit)
     {
         long long quota = 0;
@@ -246,12 +216,40 @@ namespace hardware::platform
         }
     }
 
+    void consider_memory_limit(uint64_t &limit, uint64_t candidate)
+    {
+        if (candidate > 0 && (limit == 0 || candidate < limit))
+        {
+            limit = candidate;
+        }
+    }
+
+    void parse_cgroup_v2_memory_limit(std::istream &input, uint64_t &limit)
+    {
+        std::string value_str;
+        if ((input >> value_str) && value_str != CGROUP_V2_UNLIMITED_QUOTA)
+        {
+            try
+            {
+                consider_memory_limit(limit, std::stoull(value_str));
+            }
+            catch (const std::exception &)
+            {
+            }
+        }
+    }
+
+    void parse_cgroup_v1_memory_limit(std::istream &input, uint64_t &limit)
+    {
+        uint64_t value = 0;
+        if ((input >> value) && value > 0 && value < CGROUP_V1_MEMORY_UNLIMITED_SENTINEL)
+        {
+            consider_memory_limit(limit, value);
+        }
+    }
+
     // LCOV_EXCL_START
 
-    /**
-     * Reads the affinity mask of this process, which respects taskset pinning
-     * and container cpusets.
-     */
     void read_affinity_cpu_limit(uint32_t &limit)
     {
         cpu_set_t mask;
@@ -292,10 +290,24 @@ namespace hardware::platform
         return limit;
     }
 
-    /**
-     * Walks the GPU query tiers in order, stopping at the first that reports a
-     * device: the vendor tools give exact names and VRAM, lspci only an estimate.
-     */
+    uint64_t get_effective_memory_limit()
+    {
+        uint64_t limit = 0;
+
+        std::ifstream memory_max(CGROUP_V2_MEMORY_MAX_PATH);
+        parse_cgroup_v2_memory_limit(memory_max, limit);
+
+        std::ifstream memory_limit_in_bytes(CGROUP_V1_MEMORY_LIMIT_PATH);
+        parse_cgroup_v1_memory_limit(memory_limit_in_bytes, limit);
+
+        if (limit == 0)
+        {
+            limit = get_ram().get_total_size_in_bytes();
+        }
+
+        return limit;
+    }
+
     std::vector<Gpu> get_gpus()
     {
         std::vector<Gpu> gpus;

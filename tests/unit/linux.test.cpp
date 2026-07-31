@@ -28,11 +28,14 @@
 #include <string>
 #include <vector>
 #include "include/hardware/platform.h"
-#include "src/hardware/linux_internal.h"
+#include "include/hardware/internal/linux.h"
 
 using hardware::platform::consider_cpu_limit;
+using hardware::platform::consider_memory_limit;
 using hardware::platform::parse_amd_gpus;
+using hardware::platform::parse_cgroup_v1_memory_limit;
 using hardware::platform::parse_cgroup_v1_quota;
+using hardware::platform::parse_cgroup_v2_memory_limit;
 using hardware::platform::parse_cgroup_v2_quota;
 using hardware::platform::parse_cpuinfo;
 using hardware::platform::parse_generic_gpus;
@@ -41,8 +44,6 @@ using hardware::platform::parse_nvidia_gpus;
 class LinuxParseTest : public ::testing::Test
 {
 protected:
-    /* Splits a blob into the line-per-entry shape get_command_stdout yields,
-     * newline included, so the parsers see exactly what popen would give. */
     static std::vector<std::string> as_lines(const std::string &blob)
     {
         std::vector<std::string> lines;
@@ -55,8 +56,6 @@ protected:
         return lines;
     }
 };
-
-/* ------------------------------------------------------- nvidia-smi --- */
 
 TEST_F(LinuxParseTest, NvidiaParsesIndexNameAndVram)
 {
@@ -79,7 +78,6 @@ TEST_F(LinuxParseTest, NvidiaIgnoresRowsWithoutTwoCommas)
     EXPECT_TRUE(gpus.empty());
 }
 
-/* A non-numeric index makes stoi throw; the row is skipped, not fatal. */
 TEST_F(LinuxParseTest, NvidiaSkipsUnparseableRow)
 {
     std::vector<hardware::Gpu> gpus;
@@ -93,8 +91,6 @@ TEST_F(LinuxParseTest, NvidiaHandlesNoOutput)
     parse_nvidia_gpus({}, gpus);
     EXPECT_TRUE(gpus.empty());
 }
-
-/* ---------------------------------------------------------- rocm-smi --- */
 
 TEST_F(LinuxParseTest, AmdParsesCardRows)
 {
@@ -129,12 +125,6 @@ TEST_F(LinuxParseTest, AmdSkipsUnparseableVram)
     EXPECT_TRUE(gpus.empty());
 }
 
-/* -------------------------------------------------------------- lspci --- */
-
-/**
- * The model name must come from the original line, not the lowercased copy
- * used for matching -- otherwise adapter names arrive mangled.
- */
 TEST_F(LinuxParseTest, GenericPreservesNameCasing)
 {
     std::vector<hardware::Gpu> gpus;
@@ -161,7 +151,6 @@ TEST_F(LinuxParseTest, GenericIgnoresNonGraphicsDevices)
     EXPECT_TRUE(gpus.empty());
 }
 
-/* A VGA line with no ": " separator keeps the placeholder name. */
 TEST_F(LinuxParseTest, GenericFallsBackToPlaceholderName)
 {
     std::vector<hardware::Gpu> gpus;
@@ -175,20 +164,14 @@ TEST_F(LinuxParseTest, GenericAssignsSequentialDeviceIds)
 {
     std::vector<hardware::Gpu> gpus;
     parse_generic_gpus(as_lines("01:00.0 VGA compatible controller: Card One\n"
-                                "02:00.0 VGA compatible controller: Card Two"), gpus);
+                                "02:00.0 VGA compatible controller: Card Two"),
+                       gpus);
 
     ASSERT_EQ(gpus.size(), 2u);
     EXPECT_EQ(gpus.at(0).get_device_id(), 0);
     EXPECT_EQ(gpus.at(1).get_device_id(), 1);
 }
 
-/* ----------------------------------------------------- /proc/cpuinfo --- */
-
-/**
- * Two sockets x two cores x two threads. Core id 0 on socket 0 and core id 0
- * on socket 1 are different cores, so the (physical id, core id) pair is what
- * has to be counted -- counting bare core ids would report 2 instead of 4.
- */
 TEST_F(LinuxParseTest, CpuinfoCountsDistinctPhysicalCorePairs)
 {
     std::string body;
@@ -216,10 +199,6 @@ TEST_F(LinuxParseTest, CpuinfoCountsDistinctPhysicalCorePairs)
     EXPECT_EQ(cpus.at(0).get_model_name(), "Test Xeon");
 }
 
-/**
- * Kernels that publish no topology (most ARM boards) leave the pair set empty;
- * the count falls back to the logical count rather than to zero.
- */
 TEST_F(LinuxParseTest, CpuinfoWithoutTopologyFallsBackToLogicalCount)
 {
     std::istringstream input("processor\t: 0\nBogoMIPS\t: 108.00\n\n");
@@ -242,7 +221,6 @@ TEST_F(LinuxParseTest, CpuinfoZeroLogicalCoresUsesDefault)
     EXPECT_EQ(cpus.at(0).get_logical_cores(), 4u);
 }
 
-/* Non-numeric ids make stoi throw; the field is skipped, the parse continues. */
 TEST_F(LinuxParseTest, CpuinfoSkipsMalformedFields)
 {
     std::istringstream input("processor\t:\n"
@@ -268,8 +246,6 @@ TEST_F(LinuxParseTest, CpuinfoEmptyInputFallsBackToLogicalCount)
     EXPECT_EQ(cpus.at(0).get_logical_cores(), 3u);
     EXPECT_EQ(cpus.at(0).get_physical_cores(), 3u);
 }
-
-/* ------------------------------------------------------ cgroup quotas --- */
 
 TEST_F(LinuxParseTest, ConsiderCpuLimitKeepsTheTightestNonZero)
 {
@@ -329,7 +305,6 @@ TEST_F(LinuxParseTest, CgroupV1QuotaRoundsUpToWholeCores)
     EXPECT_EQ(limit, 2u);
 }
 
-/* A quota of -1 is cgroup v1's "unlimited". */
 TEST_F(LinuxParseTest, CgroupV1UnlimitedIsIgnored)
 {
     std::istringstream quota("-1\n");
@@ -348,12 +323,89 @@ TEST_F(LinuxParseTest, CgroupV1EmptyStreamsAreIgnored)
     EXPECT_EQ(limit, 0u);
 }
 
-/* ------------------------------------------------ public entry points --- */
+TEST_F(LinuxParseTest, ConsiderMemoryLimitKeepsTheTightestNonZero)
+{
+    uint64_t limit = 0;
 
-/**
- * The detection entry points are the excluded I/O layer, but they still have
- * to return something coherent on whatever machine the suite runs on.
- */
+    consider_memory_limit(limit, 0);
+    EXPECT_EQ(limit, 0u);
+
+    consider_memory_limit(limit, 8ULL * hardware::BYTES_PER_GB);
+    EXPECT_EQ(limit, 8ULL * hardware::BYTES_PER_GB);
+
+    consider_memory_limit(limit, 4ULL * hardware::BYTES_PER_GB);
+    EXPECT_EQ(limit, 4ULL * hardware::BYTES_PER_GB);
+
+    consider_memory_limit(limit, 9ULL * hardware::BYTES_PER_GB);
+    EXPECT_EQ(limit, 4ULL * hardware::BYTES_PER_GB);
+}
+
+TEST_F(LinuxParseTest, CgroupV2MemoryLimitIsReadDirectly)
+{
+    std::istringstream input("536870912\n");
+    uint64_t limit = 0;
+    parse_cgroup_v2_memory_limit(input, limit);
+    EXPECT_EQ(limit, 536870912ULL);
+}
+
+TEST_F(LinuxParseTest, CgroupV2MemoryUnlimitedIsIgnored)
+{
+    std::istringstream input("max\n");
+    uint64_t limit = 0;
+    parse_cgroup_v2_memory_limit(input, limit);
+    EXPECT_EQ(limit, 0u);
+}
+
+TEST_F(LinuxParseTest, CgroupV2MemoryMalformedValueIsIgnored)
+{
+    std::istringstream input("not-a-number\n");
+    uint64_t limit = 0;
+    parse_cgroup_v2_memory_limit(input, limit);
+    EXPECT_EQ(limit, 0u);
+}
+
+TEST_F(LinuxParseTest, CgroupV2MemoryEmptyStreamIsIgnored)
+{
+    std::istringstream input("");
+    uint64_t limit = 0;
+    parse_cgroup_v2_memory_limit(input, limit);
+    EXPECT_EQ(limit, 0u);
+}
+
+TEST_F(LinuxParseTest, CgroupV1MemoryLimitIsReadDirectly)
+{
+    std::istringstream input("268435456\n");
+    uint64_t limit = 0;
+    parse_cgroup_v1_memory_limit(input, limit);
+    EXPECT_EQ(limit, 268435456ULL);
+}
+
+TEST_F(LinuxParseTest, CgroupV1MemoryUnlimitedSentinelIsIgnored)
+{
+    std::istringstream input("9223372036854771712\n");
+    uint64_t limit = 0;
+    parse_cgroup_v1_memory_limit(input, limit);
+    EXPECT_EQ(limit, 0u);
+}
+
+TEST_F(LinuxParseTest, CgroupV1MemoryEmptyStreamIsIgnored)
+{
+    std::istringstream input("");
+    uint64_t limit = 0;
+    parse_cgroup_v1_memory_limit(input, limit);
+    EXPECT_EQ(limit, 0u);
+}
+
+TEST_F(LinuxParseTest, BothCgroupMemoryVersionsSetTightestWins)
+{
+    uint64_t limit = 0;
+    std::istringstream v2("536870912\n");
+    parse_cgroup_v2_memory_limit(v2, limit);
+    std::istringstream v1("268435456\n");
+    parse_cgroup_v1_memory_limit(v1, limit);
+    EXPECT_EQ(limit, 268435456ULL);
+}
+
 TEST_F(LinuxParseTest, PublicEntryPointsReturnCoherentValues)
 {
     std::vector<hardware::Cpu> cpus = hardware::platform::get_cpus();
@@ -364,6 +416,10 @@ TEST_F(LinuxParseTest, PublicEntryPointsReturnCoherentValues)
     EXPECT_GT(hardware::platform::get_ram().get_total_size_in_bytes(), 0u);
     EXPECT_EQ(hardware::platform::get_os().get_name(), "Linux");
     EXPECT_GT(hardware::platform::get_effective_cpu_limit(), 0u);
+
+    EXPECT_GT(hardware::platform::get_effective_memory_limit(), 0u);
+    EXPECT_LE(hardware::platform::get_effective_memory_limit(),
+              hardware::platform::get_ram().get_total_size_in_bytes());
 
     for (const hardware::Gpu &gpu : hardware::platform::get_gpus())
     {

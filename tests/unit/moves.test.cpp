@@ -56,7 +56,7 @@ namespace chess
         {
             if (!piece)
             {
-                logger::ERROR("Piece is null. Moves cannot be generated 😢");
+                logger::error("Piece is null. Moves cannot be generated 😢");
                 return;
             }
             ::chess::Moves::generate_moves(piece->getRank(), piece->getFile(), board, moves);
@@ -145,9 +145,9 @@ public:
         return (1ULL << (epRank * 8 + epFile));
     }
 
-    uint64_t get_bitboard(int /*index*/) const override
+    uint64_t get_bitboard(int) const override
     {
-        return 0ULL; /* MockBoard doesn't track per-piece bitboards */
+        return 0ULL;
     }
 
     uint8_t get_half_move_clock(void) const override
@@ -200,7 +200,6 @@ protected:
 
 std::string MovesTest::standard_position = "";
 
-/* Singleton tests */
 TEST_F(MovesTest, GetInstance)
 {
     chess::MovesWrapper &moves1 = chess::MovesWrapper::get_instance();
@@ -209,7 +208,6 @@ TEST_F(MovesTest, GetInstance)
     EXPECT_EQ(&moves1, &moves2);
 }
 
-/* Pawn movement tests */
 TEST_F(MovesTest, WhitePawnSingleMove)
 {
     MockBoard board;
@@ -320,7 +318,6 @@ TEST_F(MovesTest, PawnAtEdge)
     EXPECT_TRUE(moves.empty());
 }
 
-/* Edge cases */
 TEST_F(MovesTest, NullPiece)
 {
     MockBoard board;
@@ -340,13 +337,11 @@ TEST_F(MovesTest, EmptySquare)
 
     chess::MovesWrapper::get_instance().generate_moves(empty, board, moves);
 
-    /* Directly invoke RealMoves to cover null/empty checks */
     ::chess::Moves::generate_moves(3, 4, board, moves);
 
     EXPECT_TRUE(moves.empty());
 }
 
-/* Utility test */
 TEST_F(MovesTest, LogGeneratedMoves)
 {
     MockBoard board;
@@ -358,7 +353,6 @@ TEST_F(MovesTest, LogGeneratedMoves)
     SUCCEED();
 }
 
-/* Test non-pawn piece to cover default case */
 TEST_F(MovesTest, NonPawnPiece)
 {
     MockBoard board;
@@ -373,7 +367,6 @@ TEST_F(MovesTest, NonPawnPiece)
     EXPECT_TRUE(moveExists(moves, "b1", "c3"));
 }
 
-/* Test with rook piece to ensure default case coverage */
 TEST_F(MovesTest, RookPiece)
 {
     MockBoard board;
@@ -530,7 +523,6 @@ TEST_F(MovesTest, BlackRookMovement)
     EXPECT_TRUE(moveExists(moves, "d4", "h4"));
 }
 
-/* Bishop movement tests */
 TEST_F(MovesTest, BishopDiagonalMovement)
 {
     MockBoard board;
@@ -650,7 +642,6 @@ TEST_F(MovesTest, BlackBishopMovement)
     EXPECT_TRUE(moveExists(moves, "d4", "a7"));
 }
 
-/* Queen movement tests */
 TEST_F(MovesTest, QueenCombinedMovement)
 {
     MockBoard board;
@@ -775,7 +766,6 @@ TEST_F(MovesTest, QueenPiece)
     EXPECT_TRUE(moves.empty());
 }
 
-/* Knight movement tests */
 TEST_F(MovesTest, KnightLShapeMovement)
 {
     MockBoard board;
@@ -1133,15 +1123,11 @@ TEST_F(MovesTest, StressTestGenerateMoves)
     }
 }
 
-/* =====================================================================
- * New v0.3.0 Moves Tests
- * ===================================================================== */
-
 TEST_F(MovesTest, CastlingKingside_WhiteKing)
 {
     MockBoard board;
-    board.addPiece(0, 4, 'K'); /* e1 */
-    board.addPiece(0, 7, 'R'); /* h1 */
+    board.addPiece(0, 4, 'K');
+    board.addPiece(0, 7, 'R');
     board.set_castling("KQkq");
 
     std::vector<chess::Move> moves;
@@ -1161,8 +1147,8 @@ TEST_F(MovesTest, CastlingKingside_WhiteKing)
 TEST_F(MovesTest, CastlingQueenside_WhiteKing)
 {
     MockBoard board;
-    board.addPiece(0, 4, 'K'); /* e1 */
-    board.addPiece(0, 0, 'R'); /* a1 */
+    board.addPiece(0, 4, 'K');
+    board.addPiece(0, 0, 'R');
     board.set_castling("KQkq");
 
     std::vector<chess::Move> moves;
@@ -1182,9 +1168,9 @@ TEST_F(MovesTest, CastlingQueenside_WhiteKing)
 TEST_F(MovesTest, CastlingBlocked_PieceInPath)
 {
     MockBoard board;
-    board.addPiece(0, 4, 'K'); /* e1 */
-    board.addPiece(0, 5, 'B'); /* f1 blocks kingside */
-    board.addPiece(0, 7, 'R'); /* h1 */
+    board.addPiece(0, 4, 'K');
+    board.addPiece(0, 5, 'B');
+    board.addPiece(0, 7, 'R');
     board.set_castling("KQkq");
 
     std::vector<chess::Move> moves;
@@ -1204,9 +1190,9 @@ TEST_F(MovesTest, CastlingBlocked_PieceInPath)
 TEST_F(MovesTest, CastlingNoCastlingRights)
 {
     MockBoard board;
-    board.addPiece(0, 4, 'K'); /* e1 */
-    board.addPiece(0, 7, 'R'); /* h1 */
-    board.set_castling("-");   /* no castling rights */
+    board.addPiece(0, 4, 'K');
+    board.addPiece(0, 7, 'R');
+    board.set_castling("-");
 
     std::vector<chess::Move> moves;
     ::chess::Moves::generate_moves(0, 4, board, moves);
@@ -1225,8 +1211,8 @@ TEST_F(MovesTest, CastlingNoCastlingRights)
 TEST_F(MovesTest, CastlingBlackKing_Kingside)
 {
     MockBoard board;
-    board.addPiece(7, 4, 'k'); /* e8 */
-    board.addPiece(7, 7, 'r'); /* h8 */
+    board.addPiece(7, 4, 'k');
+    board.addPiece(7, 7, 'r');
     board.set_castling("kq");
 
     std::vector<chess::Move> moves;
@@ -1246,8 +1232,8 @@ TEST_F(MovesTest, CastlingBlackKing_Kingside)
 TEST_F(MovesTest, CastlingBlackKing_Queenside)
 {
     MockBoard board;
-    board.addPiece(7, 4, 'k'); /* e8 */
-    board.addPiece(7, 0, 'r'); /* a8 */
+    board.addPiece(7, 4, 'k');
+    board.addPiece(7, 0, 'r');
     board.set_castling("kq");
 
     std::vector<chess::Move> moves;
@@ -1266,9 +1252,8 @@ TEST_F(MovesTest, CastlingBlackKing_Queenside)
 
 TEST_F(MovesTest, CastlingKing_NotOnStartSquare)
 {
-    /* King not on e1/e8, no castling generated */
     MockBoard board;
-    board.addPiece(3, 4, 'K'); /* King on e4 */
+    board.addPiece(3, 4, 'K');
     board.addPiece(3, 7, 'R');
     board.set_castling("KQkq");
 
@@ -1289,7 +1274,7 @@ TEST_F(MovesTest, CastlingKing_NotOnStartSquare)
 TEST_F(MovesTest, CastlingKingside_NoRookPresent)
 {
     MockBoard board;
-    board.addPiece(0, 4, 'K'); /* e1 */
+    board.addPiece(0, 4, 'K');
     /* No rook at h1 */
     board.set_castling("KQkq");
 
@@ -1310,7 +1295,7 @@ TEST_F(MovesTest, CastlingKingside_NoRookPresent)
 TEST_F(MovesTest, Promotion_WhitePawnAtRank6)
 {
     MockBoard board;
-    board.addPiece(6, 4, 'P'); /* White pawn at e7 (rank 6) */
+    board.addPiece(6, 4, 'P');
 
     std::vector<chess::Move> moves;
     ::chess::Moves::generate_moves(6, 4, board, moves);
@@ -1325,7 +1310,6 @@ TEST_F(MovesTest, Promotion_WhitePawnAtRank6)
     }
     EXPECT_EQ(promotionCount, 4);
 
-    /* Verify all 4 pieces */
     bool hasQ = false, hasR = false, hasB = false, hasN = false;
     for (const auto &m : moves)
     {
@@ -1351,7 +1335,7 @@ TEST_F(MovesTest, Promotion_WhitePawnAtRank6)
 TEST_F(MovesTest, Promotion_BlackPawnAtRank1)
 {
     MockBoard board;
-    board.addPiece(1, 4, 'p'); /* Black pawn at e2 (rank 1) */
+    board.addPiece(1, 4, 'p');
 
     std::vector<chess::Move> moves;
     ::chess::Moves::generate_moves(1, 4, board, moves);
@@ -1370,14 +1354,13 @@ TEST_F(MovesTest, Promotion_BlackPawnAtRank1)
 TEST_F(MovesTest, Promotion_CapturePromotion)
 {
     MockBoard board;
-    board.addPiece(6, 4, 'P'); /* White pawn at e7 */
-    board.addPiece(7, 3, 'r'); /* Black rook at d8 */
-    board.addPiece(7, 5, 'n'); /* Black knight at f8 */
+    board.addPiece(6, 4, 'P');
+    board.addPiece(7, 3, 'r');
+    board.addPiece(7, 5, 'n');
 
     std::vector<chess::Move> moves;
     ::chess::Moves::generate_moves(6, 4, board, moves);
 
-    /* Should have 4 straight promotions + 4 + 4 capture promotions */
     int promotionCount = 0;
     for (const auto &m : moves)
     {
@@ -1386,13 +1369,13 @@ TEST_F(MovesTest, Promotion_CapturePromotion)
             promotionCount++;
         }
     }
-    EXPECT_EQ(promotionCount, 12); /* 4 straight + 4 left capture + 4 right capture */
+    EXPECT_EQ(promotionCount, 12);
 }
 
 TEST_F(MovesTest, Promotion_NotAtPromotionRank)
 {
     MockBoard board;
-    board.addPiece(3, 4, 'P'); /* Pawn at e4, not promotion rank */
+    board.addPiece(3, 4, 'P');
 
     std::vector<chess::Move> moves;
     ::chess::Moves::generate_moves(3, 4, board, moves);
@@ -1403,52 +1386,51 @@ TEST_F(MovesTest, Promotion_NotAtPromotionRank)
     }
 }
 
-/* Attacks table tests */
 TEST_F(MovesTest, AttackTables_KnightAttacks)
 {
     chess::init_attack_tables();
-    /* Knight at e4 (rank 3, file 4, sq 28) should attack 8 squares if not on edge */
+
     EXPECT_EQ(__builtin_popcountll(chess::KNIGHT_ATTACKS[28]), 8);
 }
 
 TEST_F(MovesTest, AttackTables_KingAttacks)
 {
     chess::init_attack_tables();
-    /* King at e4 (sq 28) should attack 8 squares */
+
     EXPECT_EQ(__builtin_popcountll(chess::KING_ATTACKS[28]), 8);
 }
 
 TEST_F(MovesTest, AttackTables_KingAtCorner)
 {
     chess::init_attack_tables();
-    /* King at a1 (sq 0) should attack 3 squares */
+
     EXPECT_EQ(__builtin_popcountll(chess::KING_ATTACKS[0]), 3);
 }
 
 TEST_F(MovesTest, AttackTables_PawnAttacks_White)
 {
     chess::init_attack_tables();
-    /* White pawn at e4 (sq 28) attacks d5 (sq 35) and f5 (sq 37) */
+
     EXPECT_EQ(__builtin_popcountll(chess::PAWN_ATTACKS[chess::WHITE][28]), 2);
 }
 
 TEST_F(MovesTest, AttackTables_PawnAttacks_Black)
 {
     chess::init_attack_tables();
-    /* Black pawn at e5 (sq 36) attacks d4 (sq 27) and f4 (sq 29) */
+
     EXPECT_EQ(__builtin_popcountll(chess::PAWN_ATTACKS[chess::BLACK][36]), 2);
 }
 
 TEST_F(MovesTest, AttackTables_RayTable)
 {
     chess::init_attack_tables();
-    /* Ray north from a1 (sq 0) should have 7 squares (a2-a8) */
+
     EXPECT_EQ(__builtin_popcountll(chess::RAY[0][chess::RAY_N]), 7);
-    /* Ray east from a1 should have 7 squares (b1-h1) */
+
     EXPECT_EQ(__builtin_popcountll(chess::RAY[0][chess::RAY_E]), 7);
-    /* Ray northeast from a1 should have 7 squares (b2-h8) */
+
     EXPECT_EQ(__builtin_popcountll(chess::RAY[0][chess::RAY_NE]), 7);
-    /* No rays south/west/southwest from a1 */
+
     EXPECT_EQ(__builtin_popcountll(chess::RAY[0][chess::RAY_S]), 0);
     EXPECT_EQ(__builtin_popcountll(chess::RAY[0][chess::RAY_W]), 0);
 }
