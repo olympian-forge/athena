@@ -38,12 +38,6 @@ namespace hardware::platform
     constexpr const char *CPU_REGISTRY_KEY = "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0";
     constexpr const char *CPU_REGISTRY_VALUE = "ProcessorNameString";
 
-    /**
-     * Reads the processor registry key for the model name and walks the
-     * RelationProcessorCore records to find the number of cores on a CPU.
-     * Each record describes one physical core. For systems that do not
-     * report this information, defaults to 1 logical core per physical core.
-     */
     void find_and_extract_cpus(std::vector<Cpu> &cpus)
     {
         uint32_t logical_cores = std::thread::hardware_concurrency();
@@ -90,17 +84,12 @@ namespace hardware::platform
         cpus.emplace_back(Cpu(logical_cores, model_name, physical_core_count));
     }
 
-    /**
-     * Leverage DXGI to get information about the graphics adapters. DXGI is
-     * vendor agnostic, so NVIDIA, AMD and Intel adapters all enumerate here.
-     * Parse if data is found, return nothing if not.
-     */
     void find_and_extract_dxgi_gpus(std::vector<Gpu> &gpus)
     {
         IDXGIFactory *factory = nullptr;
         if (FAILED(CreateDXGIFactory(__uuidof(IDXGIFactory), reinterpret_cast<void **>(&factory))))
         {
-            logger::WARN("DXGI factory could not be created, so no GPUs could be detected.");
+            logger::warn("DXGI factory could not be created, so no GPUs could be detected.");
             return;
         }
 
@@ -135,10 +124,6 @@ namespace hardware::platform
         factory->Release();
     }
 
-    /**
-     * Keeps the tightest of the candidate limits seen so far. A candidate of
-     * zero means that source found no limit and is ignored.
-     */
     void consider_cpu_limit(uint32_t &limit, uint64_t candidate)
     {
         if (candidate > 0 && (limit == 0 || candidate < limit))
@@ -148,11 +133,17 @@ namespace hardware::platform
     }
 
     /**
-     * Reads the affinity mask of this process, which respects SetProcessAffinityMask
-     * and the CPUs a container is confined to. The mask only describes the
-     * processor group this process is assigned to, so on machines with more
-     * than 64 logical processors it covers that group alone.
+     * Keeps the tightest of the candidate memory limits seen so far. A
+     * candidate of zero means that source found no limit and is ignored.
      */
+    void consider_memory_limit(uint64_t &limit, uint64_t candidate)
+    {
+        if (candidate > 0 && (limit == 0 || candidate < limit))
+        {
+            limit = candidate;
+        }
+    }
+
     void find_affinity_cpu_limit(uint32_t &limit)
     {
         DWORD_PTR process_mask = 0;
@@ -171,12 +162,6 @@ namespace hardware::platform
         }
     }
 
-    /**
-     * Reads the CPU rate cap of the job object this process belongs to, which
-     * is what Windows containers throttle with. CpuRate is expressed in
-     * hundredths of a percent of total machine capacity, and is rounded up to
-     * whole cores.
-     */
     void find_job_object_cpu_limit(uint32_t &limit)
     {
         JOBOBJECT_CPU_RATE_CONTROL_INFORMATION rate_control;
@@ -201,6 +186,26 @@ namespace hardware::platform
         consider_cpu_limit(limit, (allowed + CPU_RATE_SCALE - 1) / CPU_RATE_SCALE);
     }
 
+    void find_job_object_memory_limit(uint64_t &limit)
+    {
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION info;
+        DWORD returned_length = 0;
+        if (!QueryInformationJobObject(nullptr, JobObjectExtendedLimitInformation, &info, sizeof(info), &returned_length))
+        {
+            return;
+        }
+
+        if ((info.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_PROCESS_MEMORY) != 0)
+        {
+            consider_memory_limit(limit, static_cast<uint64_t>(info.ProcessMemoryLimit));
+        }
+
+        if ((info.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_JOB_MEMORY) != 0)
+        {
+            consider_memory_limit(limit, static_cast<uint64_t>(info.JobMemoryLimit));
+        }
+    }
+
     std::vector<Cpu> get_cpus()
     {
         std::vector<Cpu> cpus;
@@ -216,6 +221,20 @@ namespace hardware::platform
 
         find_affinity_cpu_limit(limit);
         find_job_object_cpu_limit(limit);
+
+        return limit;
+    }
+
+    uint64_t get_effective_memory_limit()
+    {
+        uint64_t limit = 0;
+
+        find_job_object_memory_limit(limit);
+
+        if (limit == 0)
+        {
+            limit = get_ram().get_total_size_in_bytes();
+        }
 
         return limit;
     }

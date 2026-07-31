@@ -120,7 +120,6 @@ protected:
 std::string LoggerTest::test_log_file = "";
 std::string LoggerTest::test_backup_file = "";
 
-/* Basic functionality tests */
 TEST_F(LoggerTest, SingletonInstance)
 {
     logger::Logger &log1 = logger::Logger::get_instance();
@@ -131,7 +130,8 @@ TEST_F(LoggerTest, SingletonInstance)
 TEST_F(LoggerTest, LogDebugMessage)
 {
     logger::Logger &log = logger::Logger::get_instance();
-    log.log("Test debug message", __FILE__, __LINE__, logger::LEVEL::DEBUG);
+    log.log("Test debug message", logger::LEVEL::DEBUG);
+    log.flush();
 
     std::string content = readLogFile();
 
@@ -149,7 +149,8 @@ TEST_F(LoggerTest, LogDebugMessage)
 TEST_F(LoggerTest, LogInfoMessage)
 {
     logger::Logger &log = logger::Logger::get_instance();
-    log.log("Test info message", __FILE__, __LINE__, logger::LEVEL::INFO);
+    log.log("Test info message", logger::LEVEL::INFO);
+    log.flush();
 
     std::string content = readLogFile();
     EXPECT_TRUE(content.find("[INFO] - Test info message") != std::string::npos);
@@ -159,7 +160,8 @@ TEST_F(LoggerTest, LogInfoMessage)
 TEST_F(LoggerTest, LogWarnMessage)
 {
     logger::Logger &log = logger::Logger::get_instance();
-    log.log("Test warn message", __FILE__, __LINE__, logger::LEVEL::WARN);
+    log.log("Test warn message", logger::LEVEL::WARN);
+    log.flush();
 
     std::string content = readLogFile();
     EXPECT_TRUE(content.find("[WARN] - Test warn message") != std::string::npos);
@@ -169,7 +171,8 @@ TEST_F(LoggerTest, LogWarnMessage)
 TEST_F(LoggerTest, LogErrorMessage)
 {
     logger::Logger &log = logger::Logger::get_instance();
-    log.log("Test error message", __FILE__, __LINE__, logger::LEVEL::ERROR);
+    log.log("Test error message", logger::LEVEL::ERROR);
+    log.flush();
 
     std::string content = readLogFile();
     EXPECT_TRUE(content.find("[ERROR] - Test error message") != std::string::npos);
@@ -179,18 +182,20 @@ TEST_F(LoggerTest, LogErrorMessage)
 TEST_F(LoggerTest, LogCriticalMessage)
 {
     logger::Logger &log = logger::Logger::get_instance();
-    log.log("Test critical message", __FILE__, __LINE__, logger::LEVEL::CRITICAL);
+    log.log("Test critical message", logger::LEVEL::CRITICAL);
+    log.flush();
 
     std::string content = readLogFile();
     EXPECT_TRUE(content.find("[CRITICAL] - Test critical message") != std::string::npos);
     EXPECT_TRUE(content.find(__FILE__) != std::string::npos);
 }
 
-/* Macro tests */
-TEST_F(LoggerTest, DebugMacro)
+/* Free function tests (replace the old macros) */
+TEST_F(LoggerTest, DebugFreeFunction)
 {
     using namespace logger;
-    DEBUG("Test debug macro");
+    debug("Test debug macro");
+    Logger::get_instance().flush();
 
     std::string content = readLogFile();
 
@@ -204,47 +209,51 @@ TEST_F(LoggerTest, DebugMacro)
     }
 }
 
-TEST_F(LoggerTest, InfoMacro)
+TEST_F(LoggerTest, InfoFreeFunction)
 {
     using namespace logger;
-    INFO("Test info macro");
+    info("Test info macro");
+    Logger::get_instance().flush();
 
     std::string content = readLogFile();
     EXPECT_TRUE(content.find("[INFO] - Test info macro") != std::string::npos);
 }
 
-TEST_F(LoggerTest, WarnMacro)
+TEST_F(LoggerTest, WarnFreeFunction)
 {
     using namespace logger;
-    WARN("Test warn macro");
+    warn("Test warn macro");
+    Logger::get_instance().flush();
 
     std::string content = readLogFile();
     EXPECT_TRUE(content.find("[WARN] - Test warn macro") != std::string::npos);
 }
 
-TEST_F(LoggerTest, ErrorMacro)
+TEST_F(LoggerTest, ErrorFreeFunction)
 {
     using namespace logger;
-    ERROR("Test error macro");
+    error("Test error macro");
+    Logger::get_instance().flush();
 
     std::string content = readLogFile();
     EXPECT_TRUE(content.find("[ERROR] - Test error macro") != std::string::npos);
 }
 
-TEST_F(LoggerTest, CriticalMacro)
+TEST_F(LoggerTest, CriticalFreeFunction)
 {
     using namespace logger;
-    CRITICAL("Test critical macro");
+    critical("Test critical macro");
+    Logger::get_instance().flush();
 
     std::string content = readLogFile();
     EXPECT_TRUE(content.find("[CRITICAL] - Test critical macro") != std::string::npos);
 }
 
-/* Debug mode tests */
 TEST_F(LoggerTest, DebugMessageBehavior)
 {
     logger::Logger &log = logger::Logger::get_instance();
-    log.log("Debug message behavior test", __FILE__, __LINE__, logger::LEVEL::DEBUG);
+    log.log("Debug message behavior test", logger::LEVEL::DEBUG);
+    log.flush();
 
     std::string content = readLogFile();
 
@@ -259,14 +268,14 @@ TEST_F(LoggerTest, DebugMessageBehavior)
     }
 }
 
-/* Log rotation tests */
 TEST_F(LoggerTest, LogRotationWhenFileSizeExceedsLimit)
 {
     createLargeLogFile(logger::MAX_LOG_SIZE + 1000);
     EXPECT_TRUE(std::filesystem::exists(logger::LOG_FILE));
 
     logger::Logger &log = logger::Logger::get_instance();
-    log.log("New message after rotation", __FILE__, __LINE__, logger::LEVEL::INFO);
+    log.log("New message after rotation", logger::LEVEL::INFO);
+    log.flush();
 
     std::string backup_file = std::string(logger::LOG_FILE) + ".1";
     EXPECT_TRUE(std::filesystem::exists(backup_file));
@@ -291,7 +300,8 @@ TEST_F(LoggerTest, LogRotationWithExistingBackupFile)
     auto original_backup_size = std::filesystem::file_size(backup_file);
 
     logger::Logger &log = logger::Logger::get_instance();
-    log.log("New message after rotation with existing backup", __FILE__, __LINE__, logger::LEVEL::INFO);
+    log.log("New message after rotation with existing backup", logger::LEVEL::INFO);
+    log.flush();
 
     EXPECT_TRUE(std::filesystem::exists(backup_file));
 
@@ -302,7 +312,6 @@ TEST_F(LoggerTest, LogRotationWithExistingBackupFile)
     EXPECT_TRUE(content.find("New message after rotation with existing backup") != std::string::npos);
 }
 
-/* Thread safety tests */
 TEST_F(LoggerTest, ThreadSafetyMultipleThreads)
 {
     logger::Logger &log = logger::Logger::get_instance();
@@ -318,7 +327,7 @@ TEST_F(LoggerTest, ThreadSafetyMultipleThreads)
             for (int j = 0; j < messages_per_thread; ++j)
             {
                 std::string message = "Thread " + std::to_string(i) + " Message " + std::to_string(j);
-                log.log(message, __FILE__, __LINE__, logger::LEVEL::INFO);
+                log.log(message, logger::LEVEL::INFO);
             } });
     }
 
@@ -326,6 +335,8 @@ TEST_F(LoggerTest, ThreadSafetyMultipleThreads)
     {
         thread.join();
     }
+
+    log.flush();
 
     std::string content = readLogFile();
 
@@ -339,11 +350,11 @@ TEST_F(LoggerTest, ThreadSafetyMultipleThreads)
     }
 }
 
-/* Edge cases */
 TEST_F(LoggerTest, EmptyMessage)
 {
     logger::Logger &log = logger::Logger::get_instance();
-    log.log("", __FILE__, __LINE__, logger::LEVEL::INFO);
+    log.log("", logger::LEVEL::INFO);
+    log.flush();
 
     std::string content = readLogFile();
     EXPECT_TRUE(content.find("[INFO] -") != std::string::npos);
@@ -353,7 +364,8 @@ TEST_F(LoggerTest, LongMessage)
 {
     logger::Logger &log = logger::Logger::get_instance();
     std::string long_message(10000, 'A');
-    log.log(long_message, __FILE__, __LINE__, logger::LEVEL::INFO);
+    log.log(long_message, logger::LEVEL::INFO);
+    log.flush();
 
     std::string content = readLogFile();
     EXPECT_TRUE(content.find(long_message) != std::string::npos);
@@ -363,31 +375,35 @@ TEST_F(LoggerTest, SpecialCharactersInMessage)
 {
     logger::Logger &log = logger::Logger::get_instance();
     std::string special_message = "Special chars: !@#$%^&*()_+{}|:<>?[]\\;'\",./ \n\t";
-    log.log(special_message, __FILE__, __LINE__, logger::LEVEL::INFO);
+    log.log(special_message, logger::LEVEL::INFO);
+    log.flush();
 
     std::string content = readLogFile();
     EXPECT_TRUE(content.find("Special chars:") != std::string::npos);
 }
 
-/* Invalid level handling */
 TEST_F(LoggerTest, InvalidLogLevel)
 {
     logger::Logger &log = logger::Logger::get_instance();
-    log.log("Invalid level test", __FILE__, __LINE__, static_cast<logger::LEVEL>(99));
+    log.log("Invalid level test", static_cast<logger::LEVEL>(99));
+    log.flush();
 
     std::string content = readLogFile();
+    EXPECT_TRUE(content.find("[UNKNOWN] - Invalid level test") != std::string::npos);
 }
 
-/* File I/O error handling */
 TEST_F(LoggerTest, LogToReadOnlyDirectory)
 {
     logger::Logger &log = logger::Logger::get_instance();
-    log.log("Test message", __FILE__, __LINE__, logger::LEVEL::INFO);
+    log.log("Test message", logger::LEVEL::INFO);
+    log.flush();
 
-    EXPECT_NO_THROW(log.log("Another test", __FILE__, __LINE__, logger::LEVEL::INFO));
+    EXPECT_NO_THROW({
+        log.log("Another test", logger::LEVEL::INFO);
+        log.flush();
+    });
 }
 
-/* Exception handling */
 TEST_F(LoggerTest, FileOpeningFailure)
 {
     std::filesystem::path log_path(logger::LOG_FILE);
@@ -406,7 +422,8 @@ TEST_F(LoggerTest, FileOpeningFailure)
     file_blocker.close();
 
     logger::Logger &log = logger::Logger::get_instance();
-    log.log("This should fail to write", __FILE__, __LINE__, logger::LEVEL::INFO);
+    log.log("This should fail to write", logger::LEVEL::INFO);
+    log.flush();
 
     std::filesystem::remove(log_dir);
 
@@ -420,5 +437,18 @@ TEST_F(LoggerTest, ExceptionHandlingInLogging)
 {
     logger::Logger &log = logger::Logger::get_instance();
     logger::LEVEL invalid_level = static_cast<logger::LEVEL>(255);
-    log.log("Test exception handling", __FILE__, __LINE__, invalid_level);
+    log.log("Test exception handling", invalid_level);
+    log.flush();
+}
+
+TEST_F(LoggerTest, ShutdownDrainsRemainingBufferAndIsIdempotent)
+{
+    logger::Logger &log = logger::Logger::get_instance();
+    log.log("Message before shutdown", logger::LEVEL::INFO);
+
+    log.shutdown();
+    EXPECT_NO_THROW(log.shutdown());
+
+    std::string content = readLogFile();
+    EXPECT_TRUE(content.find("Message before shutdown") != std::string::npos);
 }

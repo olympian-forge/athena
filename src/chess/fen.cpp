@@ -16,6 +16,7 @@
  */
 
 #include "include/chess/fen.h"
+#include <sstream>
 
 namespace chess
 {
@@ -24,13 +25,13 @@ namespace chess
     {
         if (fen_string.empty())
         {
-            LOG_THROW_ERROR("FEN string cannot be empty", true);
+            utils::log_throw_error("FEN string cannot be empty", true);
         }
         const std::regex fen_regex(
             "^(([rnbqkpRNBQKP1-8]+/){7}[rnbqkpRNBQKP1-8]+) [wb] (-|[KQkq]+) (-|[a-h][36]) (\\d+) (\\d+)$");
         if (!std::regex_match(fen_string, fen_regex))
         {
-            LOG_THROW_ERROR("Invalid FEN string", true);
+            utils::log_throw_error("Invalid FEN string", true);
         }
 
         std::vector<std::string> tokens;
@@ -47,16 +48,14 @@ namespace chess
 
         if (this->half_move_clock > 100)
         {
-            LOG_THROW_ERROR("Invalid FEN: halfmove clock cannot exceed 100 (50-move rule)", true);
+            utils::log_throw_error("Invalid FEN: halfmove clock cannot exceed 100 (50-move rule)", true);
         }
         if (this->full_moves == 0)
         {
-            LOG_THROW_ERROR("Invalid FEN: fullmoves must be at least 1", true);
+            utils::log_throw_error("Invalid FEN: fullmoves must be at least 1", true);
         }
 
-        /* DEBUG, not INFO: constructed per thread-engine in the search hot
-         * path; INFO would cost a filesystem write per construction. */
-        logger::DEBUG("FEN initialized: " + fen_string);
+        logger::debug("FEN initialized: " + fen_string);
     }
 
     Fen::~Fen() {}
@@ -92,7 +91,7 @@ namespace chess
 
         if (!utils::are_chess_piece_count_rules_valid(piece_counts))
         {
-            LOG_THROW_ERROR("FEN placement does not comply with chess piece count rules", true);
+            utils::log_throw_error("FEN placement does not comply with chess piece count rules", true);
         }
 
         std::vector<std::string> ranks;
@@ -141,7 +140,7 @@ namespace chess
 
         if (rank_diff <= 1 && file_diff <= 1 && !(rank_diff == 0 && file_diff == 0))
         {
-            LOG_THROW_ERROR("Invalid FEN: kings cannot be adjacent to each other", true);
+            utils::log_throw_error("Invalid FEN: kings cannot be adjacent to each other", true);
         }
     }
 
@@ -151,7 +150,7 @@ namespace chess
         {
             if (c == 'P')
             {
-                LOG_THROW_ERROR("Invalid FEN: white pawns must promote upon reaching 8th rank", true);
+                utils::log_throw_error("Invalid FEN: white pawns must promote upon reaching 8th rank", true);
             }
         }
 
@@ -159,7 +158,7 @@ namespace chess
         {
             if (c == 'p')
             {
-                LOG_THROW_ERROR("Invalid FEN: black pawns must promote upon reaching 1st rank", true);
+                utils::log_throw_error("Invalid FEN: black pawns must promote upon reaching 1st rank", true);
             }
         }
     }
@@ -180,16 +179,12 @@ namespace chess
         }
         if (squares != 64)
         {
-            LOG_THROW_ERROR("Invalid FEN string: placement section does not represent 64 squares", true);
+            utils::log_throw_error("Invalid FEN string: placement section does not represent 64 squares", true);
         }
 
         this->validate_chess_rules(placement_string);
     }
 
-    /**
-     * @brief Generate FEN string from current position state.
-     * @returns Complete FEN notation string.
-     */
     std::string Fen::generate_fen(void) const
     {
         std::ostringstream oss;
@@ -202,134 +197,86 @@ namespace chess
         return oss.str();
     }
 
-    /**
-     * @brief Get castling rights string representation.
-     * @returns Castling rights (e.g., "KQkq", "-").
-     */
     std::string Fen::get_castling(void) const
     {
         return this->castling;
     }
 
-    /**
-     * @brief Get color (side to move).
-     * @returns Color value: 0 for white, 1 for black.
-     */
     uint8_t Fen::get_color(void) const
     {
         return this->color;
     }
 
-    /**
-     * @brief Get en passant target square.
-     * @returns En passant square (e.g., "e3", "-").
-     */
     std::string Fen::get_en_passant(void) const
     {
         return this->en_passant;
     }
 
-    /**
-     * @brief Get full move number (increments each time black moves).
-     * @returns Full move count.
-     */
     uint32_t Fen::get_full_moves(void) const
     {
         return this->full_moves;
     }
 
-    /**
-     * @brief Get half-move clock (moves since last pawn move or capture).
-     * @returns Half-move clock value (0-50 for draw rule).
-     */
     uint32_t Fen::get_half_move_clock(void) const
     {
         return this->half_move_clock;
     }
 
-    /**
-     * @brief Get board placement string (the rank/file portion of FEN).
-     * @returns Placement string (e.g., "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR").
-     */
     std::string Fen::get_placement(void) const
     {
         return this->placement;
     }
 
-    /**
-     * @brief Set castling rights.
-     * @param castling_rights Castling rights string (e.g., "KQkq", "-").
-     */
     void Fen::set_castling(const std::string &castling_rights)
     {
         if (castling_rights != "-" && !std::regex_match(castling_rights, std::regex("^[KQkq]+$")))
         {
-            LOG_THROW_ERROR("Invalid castling rights: " + castling_rights, true);
+            utils::log_throw_error("Invalid castling rights: " + castling_rights, true);
         }
         this->castling = castling_rights;
         return;
     }
 
-    /**
-     * @brief Set color (side to move).
-     * @param color_value Color value: 0 for white, 1 for black.
-     */
     void Fen::set_color(uint8_t color_value)
     {
         if (color_value != WHITE && color_value != BLACK)
         {
-            LOG_THROW_ERROR("Invalid color value: " + std::to_string(color_value), true);
+            utils::log_throw_error("Invalid color value: " + std::to_string(color_value), true);
         }
         this->color = color_value;
         return;
     }
 
-    /**
-     * @brief Set en passant target square.
-     * @param en_passant_square En passant square (e.g., "e3", "-").
-     */
     void Fen::set_en_passant(const std::string &en_passant_square)
     {
         if (en_passant_square != "-" && !std::regex_match(en_passant_square, std::regex("^[a-h][36]$")))
         {
-            LOG_THROW_ERROR("Invalid en passant square: " + en_passant_square, true);
+            utils::log_throw_error("Invalid en passant square: " + en_passant_square, true);
         }
         this->en_passant = en_passant_square;
         return;
     }
 
-    /**
-     * @brief Set full move number (increments each time black moves).
-     * @param full_moves_value Full move count.
-     */
     void Fen::set_full_moves(uint32_t full_moves_value)
     {
         if (full_moves_value == 0)
         {
-            LOG_THROW_ERROR("Full moves must be at least 1: " + std::to_string(full_moves_value), true);
+            utils::log_throw_error("Full moves must be at least 1: " + std::to_string(full_moves_value), true);
         }
         this->full_moves = full_moves_value;
         return;
     }
 
-    /**
-     * @brief Set half-move clock (moves since last pawn move or capture).
-     * @param half_move_clock_value Half-move clock value (0-50 for draw rule).
-     */
     void Fen::set_half_move_clock(uint32_t half_move_clock_value)
     {
         if (half_move_clock_value > 100)
         {
-            LOG_THROW_ERROR("Invalid half move clock: cannot exceed 100 (50-move rule)", true);
+            utils::log_throw_error("Invalid half move clock: cannot exceed 100 (50-move rule)", true);
         }
         this->half_move_clock = half_move_clock_value;
         return;
     }
 
-    /**
-     * @brief Set board placement string (rank/file portion of FEN).
-     * @param placement_string Placement string (e.g., "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR").
-     */
     void Fen::set_placement(const std::string &placement_string)
     {
         std::regex placement_regex(
@@ -337,7 +284,7 @@ namespace chess
 
         if (!std::regex_match(placement_string, placement_regex))
         {
-            LOG_THROW_ERROR("Invalid placement section: " + placement_string, true);
+            utils::log_throw_error("Invalid placement section: " + placement_string, true);
         }
 
         this->validate_placement(placement_string);

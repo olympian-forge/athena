@@ -17,32 +17,25 @@
 
 #pragma once
 
-#include <filesystem>
-#include <fstream>
-#include <mutex>
+#include <memory>
+#include <source_location>
 #include <stdint.h>
 #include <string>
-#include <sstream>
-#include <unordered_map>
 #include "include/core/core.h"
-#include "include/chrono/chrono.h"
 
 namespace logger
 {
+
+    struct LoggerData;
+
     class Logger
     {
     private:
-        /**
-         * @brief Private constructor to enforce the Singleton pattern.
-         */
         Logger();
 
-        /**
-         * @brief Private destructor for the Singleton instance.
-         */
         ~Logger();
 
-        mutable std::mutex log_mutex;
+        std::unique_ptr<LoggerData> impl;
 
     public:
         Logger(const Logger &) = delete;
@@ -50,26 +43,41 @@ namespace logger
         Logger &operator=(const Logger &) = delete;
         Logger &operator=(Logger &&) = delete;
 
-        /**
-         * @brief Retrieves the single global instance of the Logger.
-         * @returns Reference to the Logger instance.
-         */
         static Logger &get_instance();
 
-        /**
-         * @brief Writes a formatted log entry to the log file.
-         * @param message The log message string.
-         * @param file The name of the file where the log is generated.
-         * @param line_number The line number in the source file.
-         * @param level The severity level of the log message.
-         */
-        void log(const std::string &message, const char *file, uint32_t line_number, LEVEL level) const;
+        void log(const std::string &message, LEVEL level,
+                 std::source_location location = std::source_location::current()) const;
+
+        void shutdown() const;
     };
 
-#define CRITICAL(MESSAGE) Logger::get_instance().log(MESSAGE, __FILE__, __LINE__, logger::LEVEL::CRITICAL)
-#define DEBUG(MESSAGE) Logger::get_instance().log(MESSAGE, __FILE__, __LINE__, logger::LEVEL::DEBUG)
-#define ERROR(MESSAGE) Logger::get_instance().log(MESSAGE, __FILE__, __LINE__, logger::LEVEL::ERROR)
-#define INFO(MESSAGE) Logger::get_instance().log(MESSAGE, __FILE__, __LINE__, logger::LEVEL::INFO)
-#define WARN(MESSAGE) Logger::get_instance().log(MESSAGE, __FILE__, __LINE__, logger::LEVEL::WARN)
+    inline void critical(const std::string &message,
+                         std::source_location location = std::source_location::current())
+    {
+        Logger::get_instance().log(message, LEVEL::CRITICAL, location);
+    }
 
+    inline void debug(const std::string &message,
+                      std::source_location location = std::source_location::current())
+    {
+        Logger::get_instance().log(message, LEVEL::DEBUG, location);
+    }
+
+    inline void error(const std::string &message,
+                      std::source_location location = std::source_location::current())
+    {
+        Logger::get_instance().log(message, LEVEL::ERROR, location);
+    }
+
+    inline void info(const std::string &message,
+                     std::source_location location = std::source_location::current())
+    {
+        Logger::get_instance().log(message, LEVEL::INFO, location);
+    }
+
+    inline void warn(const std::string &message,
+                     std::source_location location = std::source_location::current())
+    {
+        Logger::get_instance().log(message, LEVEL::WARN, location);
+    }
 }

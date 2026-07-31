@@ -24,8 +24,6 @@ class HardwareTest : public ::testing::Test
 {
 };
 
-/* ---------------------------------------------------------------- Cpu --- */
-
 TEST_F(HardwareTest, CpuStoresConstructorValues)
 {
     hardware::Cpu cpu(8, "Intel(R) Core(TM) i7-5557U CPU @ 3.10GHz", 4);
@@ -47,10 +45,6 @@ TEST_F(HardwareTest, CpuClassifiesUnknownVendorAsIntel)
     EXPECT_EQ(cpu.get_cpu_type(), hardware::CpuType::INTEL);
 }
 
-/**
- * set_cpu_type lowercases before matching, so each vendor keyword has to be
- * recognised regardless of the case the model string arrives in.
- */
 TEST_F(HardwareTest, CpuClassifiesAmdKeywords)
 {
     EXPECT_EQ(hardware::Cpu(4, "AMD Opteron", 2).get_cpu_type(), hardware::CpuType::AMD);
@@ -59,8 +53,6 @@ TEST_F(HardwareTest, CpuClassifiesAmdKeywords)
     EXPECT_EQ(hardware::Cpu(4, "RYZEN 7", 2).get_cpu_type(), hardware::CpuType::AMD);
     EXPECT_EQ(hardware::Cpu(4, "EPYC 7742", 2).get_cpu_type(), hardware::CpuType::AMD);
 }
-
-/* ---------------------------------------------------------------- Gpu --- */
 
 TEST_F(HardwareTest, GpuStoresConstructorValues)
 {
@@ -96,15 +88,11 @@ TEST_F(HardwareTest, GpuClassifiesAmdKeywords)
     EXPECT_TRUE(lower.get_is_amd_gpu());
 }
 
-/* ---------------------------------------------------------------- Ram --- */
-
 TEST_F(HardwareTest, RamStoresTotalSize)
 {
     hardware::Ram ram(32ULL * hardware::BYTES_PER_GB);
     EXPECT_EQ(ram.get_total_size_in_bytes(), 32ULL * hardware::BYTES_PER_GB);
 }
-
-/* ---------------------------------------------------- OperatingSystem --- */
 
 TEST_F(HardwareTest, OperatingSystemReportsNameAndWordSize)
 {
@@ -114,11 +102,6 @@ TEST_F(HardwareTest, OperatingSystemReportsNameAndWordSize)
     EXPECT_EQ(os.get_is_64_bit(), sizeof(void *) == 8);
 }
 
-/**
- * os_type is decided by the compiling platform, not the name string, so the
- * expectation has to be written against the same preprocessor condition the
- * constructor uses.
- */
 TEST_F(HardwareTest, OperatingSystemTypeMatchesBuildPlatform)
 {
     hardware::OperatingSystem os("whatever");
@@ -131,8 +114,6 @@ TEST_F(HardwareTest, OperatingSystemTypeMatchesBuildPlatform)
     EXPECT_FALSE(os.get_is_windows());
 #endif
 }
-
-/* ----------------------------------------------------------- HostInfo --- */
 
 TEST_F(HardwareTest, HostInfoDefaultConstructorIsEmpty)
 {
@@ -165,12 +146,6 @@ TEST_F(HardwareTest, HostInfoRoundTripsComponents)
     EXPECT_EQ(info.get_os().get_name(), "TestOS");
 }
 
-/* ---------------------------------------------------------- utilities --- */
-
-/**
- * convert_bytes_to_gb deliberately adds one so a partially-filled gigabyte
- * still reports as a whole one; these expectations pin that rounding.
- */
 TEST_F(HardwareTest, ConvertBytesToGbRoundsUp)
 {
     EXPECT_EQ(hardware::convert_bytes_to_gb(0), 1u);
@@ -186,10 +161,6 @@ TEST_F(HardwareTest, ConvertGbToBytesScalesExactly)
     EXPECT_EQ(hardware::convert_gb_to_bytes(16), 16ULL * hardware::BYTES_PER_GB);
 }
 
-/**
- * The uint32_t parameter has to survive past the 255 GB that a uint8_t would
- * have silently truncated to zero.
- */
 TEST_F(HardwareTest, ConvertGbToBytesHandlesLargeCapacities)
 {
     EXPECT_EQ(hardware::convert_gb_to_bytes(512), 512ULL * hardware::BYTES_PER_GB);
@@ -202,21 +173,12 @@ TEST_F(HardwareTest, ConvertRoundTripsWholeGigabytes)
     EXPECT_EQ(hardware::convert_bytes_to_gb(bytes), 5u);
 }
 
-/* ------------------------------------------------------- host queries --- */
-
-/**
- * detect_host_info delegates to the platform backend, so the assertions stay
- * on invariants that hold on any machine the suite runs on rather than on
- * this machine's specific hardware.
- */
 TEST_F(HardwareTest, DetectHostInfoReportsUsableCpuAndOs)
 {
     hardware::HostInfo info = hardware::detect_host_info();
 
     ASSERT_FALSE(info.get_cpus().empty());
 
-    /* By value: get_cpus() returns a fresh vector, so a reference into it
-     * would dangle the moment the temporary dies. */
     hardware::Cpu cpu = info.get_cpus().at(0);
     EXPECT_GT(cpu.get_logical_cores(), 0u);
     EXPECT_GT(cpu.get_physical_cores(), 0u);
@@ -226,10 +188,6 @@ TEST_F(HardwareTest, DetectHostInfoReportsUsableCpuAndOs)
     EXPECT_GT(info.get_ram().get_total_size_in_bytes(), 0u);
 }
 
-/**
- * Every detected GPU has to carry exactly one vendor flag, whichever backend
- * and whichever detection tier produced it.
- */
 TEST_F(HardwareTest, DetectHostInfoGpusHaveExactlyOneVendor)
 {
     hardware::HostInfo info = hardware::detect_host_info();
@@ -241,10 +199,6 @@ TEST_F(HardwareTest, DetectHostInfoGpusHaveExactlyOneVendor)
     }
 }
 
-/**
- * 0 is the documented "no limit could be detected" answer, so the contract is
- * only that the value never exceeds what the machine physically has.
- */
 TEST_F(HardwareTest, EffectiveCpuLimitIsZeroOrWithinMachineCapacity)
 {
     uint32_t limit = hardware::get_effective_cpu_limit();
@@ -255,4 +209,13 @@ TEST_F(HardwareTest, EffectiveCpuLimitIsZeroOrWithinMachineCapacity)
         ASSERT_FALSE(info.get_cpus().empty());
         EXPECT_LE(limit, info.get_cpus().at(0).get_logical_cores());
     }
+}
+
+TEST_F(HardwareTest, EffectiveMemoryLimitIsWithinMachineCapacity)
+{
+    uint64_t limit = hardware::get_effective_memory_limit();
+    hardware::HostInfo info = hardware::detect_host_info();
+
+    EXPECT_GT(limit, 0u);
+    EXPECT_LE(limit, info.get_ram().get_total_size_in_bytes());
 }

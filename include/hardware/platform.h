@@ -24,6 +24,8 @@ namespace hardware::platform
 
     uint32_t get_effective_cpu_limit();
 
+    uint64_t get_effective_memory_limit();
+
     std::vector<Gpu> get_gpus();
 
     OperatingSystem get_os();

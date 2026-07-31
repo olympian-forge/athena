@@ -28,28 +28,19 @@ namespace chess
     Engine::Engine(const std::string &fen_string) : fen(fen_string), board(fen_string)
     {
         init_attack_tables();
-        /* DEBUG, not INFO: the MCTS search constructs one Engine per worker
-         * thread per move (28+ at production settings); at INFO level each
-         * construction cost a log-file open/stat/write/flush, which stalled
-         * self-play to ~10% GPU utilization on network-volume hosts. */
-        logger::DEBUG("Engine initialized with FEN: " + fen_string);
+
+        logger::debug("Engine initialized with FEN: " + fen_string);
     }
 
     Engine::~Engine() {}
 
-    /**
-     * @brief Generate all legal moves for the side to move.
-     * @returns Vector of all legal moves in the current position.
-     */
     std::vector<Move> Engine::generate_all_moves()
     {
         uint8_t active_color = board.get_color();
         std::vector<Move> all_moves;
-        /* Avoid per-piece heap allocations */
         std::vector<Move> piece_moves;
         piece_moves.reserve(32);
 
-        /* Collect moves for active pieces */
         for (uint8_t rank = 0; rank < BOARD_SIZE; ++rank)
         {
             for (uint8_t file = 0; file < BOARD_SIZE; ++file)
@@ -102,11 +93,6 @@ namespace chess
         return all_moves;
     }
 
-    /**
-     * @brief Generate all legal moves for a piece at a specific square.
-     * @param algebraic_address Square in algebraic notation (e.g., "e2").
-     * @returns Vector of legal moves for the piece on that square.
-     */
     std::vector<Move> Engine::generate_moves(const std::string &algebraic_address)
     {
         std::vector<Move> pseudo_legal;
@@ -115,7 +101,7 @@ namespace chess
         char piece_char = board.get_piece(rank, file);
         if (piece_char == '\0')
         {
-            LOG_THROW_ERROR(
+            utils::log_throw_error(
                 (std::string("Board address ") + algebraic_address + " does not contain a piece").c_str(),
                 false);
             return pseudo_legal;
@@ -123,7 +109,6 @@ namespace chess
 
         Moves::generate_moves(rank, file, board, pseudo_legal);
 
-        /* Filter pseudo-legal moves via check verification */
         bool active_is_white = std::isupper(static_cast<unsigned char>(piece_char));
         uint8_t active_color = active_is_white ? WHITE : BLACK;
 
@@ -161,29 +146,17 @@ namespace chess
         return legal;
     }
 
-    /**
-     * @brief Get a const view of the board for inspection (e.g., by evaluators).
-     * @returns Const reference to the AbstractBoard interface.
-     */
     const AbstractBoard &Engine::get_board_view() const
     {
         return board;
     }
 
-    /**
-     * @brief Get FEN notation of current board position.
-     * @returns Full FEN string.
-     */
     std::string Engine::get_fen(void)
     {
         std::string current_fen = board.get_fen();
         return current_fen;
     }
 
-    /**
-     * @brief Get combined terminal state information in a single query.
-     * @returns TerminalState struct with is_terminal flag and game score.
-     */
     Engine::TerminalState Engine::get_terminal_state()
     {
         if (board.get_half_move_clock() >= 100)
@@ -240,10 +213,6 @@ namespace chess
         return {false, 0.5};
     }
 
-    /**
-     * @brief Check if current position is checkmate.
-     * @returns True if the side to move is in checkmate, false otherwise.
-     */
     bool Engine::is_checkmate()
     {
         uint8_t active_color = board.get_color();
@@ -256,10 +225,6 @@ namespace chess
         return all_moves.empty();
     }
 
-    /**
-     * @brief Check if current position is a draw (50-move rule or stalemate).
-     * @returns True if game is drawn, false otherwise.
-     */
     bool Engine::is_draw()
     {
         if (is_stalemate())
@@ -314,10 +279,6 @@ namespace chess
         return false;
     }
 
-    /**
-     * @brief Check if current position is stalemate.
-     * @returns True if the side to move is stalemated, false otherwise.
-     */
     bool Engine::is_stalemate()
     {
         uint8_t active_color = board.get_color();
@@ -325,21 +286,15 @@ namespace chess
         {
             return false;
         }
-        /* Verify legal moves exist */
+
         auto all_moves = generate_all_moves();
         return all_moves.empty();
     }
 
-    /**
-     * @brief Make a move on the board with full validation.
-     * @param move Move to apply.
-     */
     void Engine::make_move(const Move &move)
     {
-        /* Generate legal moves */
         std::vector<Move> legal_moves = generate_all_moves();
 
-        /* Match move */
         bool found = false;
         Move matched_move = move;
         for (const auto &m : legal_moves)
@@ -356,22 +311,16 @@ namespace chess
 
         if (!found)
         {
-            logger::ERROR("Illegal or out-of-turn move requested: " + move.get_from() + " -> " + move.get_to());
+            logger::error("Illegal or out-of-turn move requested: " + move.get_from() + " -> " + move.get_to());
             throw std::invalid_argument("Illegal or out-of-turn move requested: " + move.get_from() + " -> " + move.get_to());
         }
 
         UndoState state = board.apply_move(matched_move);
         undo_stack.push_back(state);
 
-        logger::DEBUG("Made move from " + matched_move.get_from() + " to " + matched_move.get_to());
+        logger::debug("Made move from " + matched_move.get_from() + " to " + matched_move.get_to());
     }
 
-    /**
-     * @brief Make a move without legality validation (for performance-critical
-     * search paths). Undo state is still recorded; passing a move that is
-     * not legal in the current position corrupts the board.
-     * @param move Move to apply. Must be legal.
-     */
     void Engine::make_move_fast(const Move &move)
     {
         UndoState state = board.apply_move(move);
@@ -383,36 +332,26 @@ namespace chess
         board.print();
     }
 
-    /**
-     * @brief Reset the board to the starting position.
-     */
     void Engine::reset()
     {
         board.reset(fen);
         undo_stack.clear();
-        logger::INFO("Reset the board to the initial state with FEN: " + fen);
+        logger::info("Reset the board to the initial state with FEN: " + fen);
     }
 
-    /**
-     * @brief Undo the last move made.
-     */
     void Engine::undo_move()
     {
         if (undo_stack.empty())
         {
-            logger::WARN("No moves to undo");
+            logger::warn("No moves to undo");
             return;
         }
         const UndoState &state = undo_stack.back();
         board.undo_move(state);
         undo_stack.pop_back();
-        logger::DEBUG("Undid last move");
+        logger::debug("Undid last move");
     }
 
-    /**
-     * @brief Get the library version string.
-     * @returns Version string (e.g., "0.3.0").
-     */
     const char *Engine::version()
     {
         return ATHENA_VERSION;

@@ -16,78 +16,104 @@
  */
 
 #include "include/logger/logger.h"
+#include "include/logger/internal/logger.h"
+#include "include/hardware/hardware.h"
+#include "include/chrono/chrono.h"
+#include <condition_variable>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <mutex>
+#include <thread>
 
 namespace logger
 {
-    void rotate_logs();
+    constexpr double MEMORY_FRACTION = 0.01;
+    constexpr uint64_t MEMORY_FLOOR_BYTES = 16ULL * 1024 * 1024;
+    constexpr uint64_t MEMORY_CEILING_BYTES = 256ULL * 1024 * 1024;
+    constexpr size_t ASSUMED_AVERAGE_LINE_BYTES = 256;
+    constexpr std::chrono::milliseconds WRITER_WAKE_TIMEOUT(200);
 
-    std::unordered_map<LEVEL, const char *> level_types = {
-        {LEVEL::CRITICAL, "[CRITICAL] - "},
-        {LEVEL::DEBUG, "[DEBUG] - "},
-        {LEVEL::ERROR, "[ERROR] - "},
-        {LEVEL::INFO, "[INFO] - "},
-        {LEVEL::WARN, "[WARN] - "}};
-
-    /**
-     * @brief Private constructor to enforce the Singleton pattern.
-     */
-    Logger::Logger() {}
-
-    /**
-     * @brief Private destructor for the Singleton instance.
-     */
-    Logger::~Logger() {}
-
-    /**
-     * @brief Retrieves the single global instance of the Logger.
-     * @returns Reference to the Logger instance.
-     */
-    Logger &Logger::get_instance()
+    const char *level_to_string(LEVEL level)
     {
-        static Logger instance;
-        return instance;
+        switch (level)
+        {
+        case LEVEL::CRITICAL:
+            return "[CRITICAL] - ";
+        case LEVEL::DEBUG:
+            return "[DEBUG] - ";
+        case LEVEL::ERROR:
+            return "[ERROR] - ";
+        case LEVEL::INFO:
+            return "[INFO] - ";
+        case LEVEL::WARN:
+            return "[WARN] - ";
+        }
+        return "[UNKNOWN] - ";
     }
 
-    /**
-     * @brief Writes a formatted log entry to the log file.
-     * @param message The log message string.
-     * @param file The name of the file where the log is generated.
-     * @param line_number The line number in the source file.
-     * @param level The severity level of the log message.
-     */
-    void Logger::log(const std::string &message, const char *file, uint32_t line_number, LEVEL level) const
+    std::string format_log_line(const std::string &message, LEVEL level,
+                                const std::string &timestamp, const char *file, uint32_t line_number)
     {
-        if (level == LEVEL::DEBUG && !chess::DEBUG)
-        {
-            return;
-        }
-
-        auto timestamp = chrono::Chrono().get_time_with_format("%a %b %d, %Y @ %H:%M:%S");
-
-        std::lock_guard<std::mutex> guard(log_mutex);
-
-        rotate_logs();
-
-        std::ofstream log_file(LOG_FILE, std::ios_base::app);
-        if (!log_file)
-        {
-            return;
-        }
-
-        try
-        {
-            const char *type = level_types.at(level);
-            log_file << "[" << timestamp << "] [" << file << " @ Line " << line_number << "]::" << type << message << std::endl;
-        }
-        catch (const std::exception &e)
-        {
-            (void)e;
-        }
+        return "[" + timestamp + "] [" + file + " @ Line " + std::to_string(line_number) + "]::" +
+               level_to_string(level) + message + "\n";
     }
 
-    /**
-     * @brief Rotates the log file by renaming it to a backup if it exceeds the maximum allowed file size.
-     */
+    bool should_drop_for_backpressure(size_t current_count, size_t cap_count)
+    {
+        return current_count >= cap_count;
+    }
+
+    size_t compute_cap_count(uint64_t effective_memory_limit_bytes, double fraction,
+                             uint64_t floor_bytes, uint64_t ceiling_bytes,
+                             size_t assumed_average_line_bytes)
+    {
+        if (assumed_average_line_bytes == 0)
+        {
+            return 0;
+        }
+
+        uint64_t raw_bytes = static_cast<uint64_t>(static_cast<double>(effective_memory_limit_bytes) * fraction);
+        uint64_t clamped_bytes = raw_bytes;
+        if (clamped_bytes < floor_bytes)
+        {
+            clamped_bytes = floor_bytes;
+        }
+        if (clamped_bytes > ceiling_bytes)
+        {
+            clamped_bytes = ceiling_bytes;
+        }
+
+        return static_cast<size_t>(clamped_bytes / assumed_average_line_bytes);
+    }
+
+    LogBuffer::LogBuffer(size_t cap_count) : cap_count(cap_count), dropped(0)
+    {
+        lines.reserve(cap_count);
+    }
+
+    void LogBuffer::push(std::string line)
+    {
+        if (should_drop_for_backpressure(lines.size(), cap_count))
+        {
+            dropped++;
+            return;
+        }
+        lines.push_back(std::move(line));
+    }
+
+    std::vector<std::string> LogBuffer::swap_out()
+    {
+        std::vector<std::string> drained;
+        drained.reserve(cap_count);
+        std::swap(drained, lines);
+        return drained;
+    }
+
+    size_t LogBuffer::size() const { return lines.size(); }
+
+    uint64_t LogBuffer::dropped_count() const { return dropped; }
+
     void rotate_logs()
     {
         namespace fs = std::filesystem;
@@ -109,4 +135,127 @@ namespace logger
         }
     }
 
+    void write_batch(const std::vector<std::string> &batch)
+    {
+        if (batch.empty())
+        {
+            return;
+        }
+
+        rotate_logs();
+
+        std::ofstream log_file(LOG_FILE, std::ios_base::app);
+        if (!log_file)
+        {
+            return;
+        }
+
+        for (const std::string &line : batch)
+        {
+            log_file << line;
+        }
+    }
+
+    struct LoggerData
+    {
+        std::mutex mutex;
+        std::condition_variable cv;
+        LogBuffer buffer;
+        std::thread writer_thread;
+        bool stop_requested;
+        bool shut_down;
+
+        LoggerData() : buffer(compute_cap_count(hardware::get_effective_memory_limit(), MEMORY_FRACTION,
+                                                MEMORY_FLOOR_BYTES, MEMORY_CEILING_BYTES, ASSUMED_AVERAGE_LINE_BYTES)),
+                       stop_requested(false), shut_down(false)
+        {
+        }
+    };
+
+    // LCOV_EXCL_START
+    void writer_loop(LoggerData &impl)
+    {
+        while (true)
+        {
+            std::vector<std::string> batch;
+            {
+                std::unique_lock<std::mutex> lock(impl.mutex);
+                impl.cv.wait_for(lock, WRITER_WAKE_TIMEOUT, [&impl]
+                                 { return impl.stop_requested || impl.buffer.size() > 0; });
+                if (impl.stop_requested && impl.buffer.size() == 0)
+                {
+                    break;
+                }
+                batch = impl.buffer.swap_out();
+            }
+            write_batch(batch);
+        }
+    }
+    // LCOV_EXCL_STOP
+
+    Logger::Logger() : impl(std::make_unique<LoggerData>())
+    {
+        impl->writer_thread = std::thread(writer_loop, std::ref(*impl));
+    }
+
+    Logger::~Logger()
+    {
+        shutdown();
+    }
+
+    Logger &Logger::get_instance()
+    {
+        static Logger instance;
+        return instance;
+    }
+
+    void Logger::log(const std::string &message, LEVEL level, std::source_location location) const
+    {
+        if (level == LEVEL::DEBUG && !chess::DEBUG)
+        {
+            return;
+        }
+
+        std::string timestamp = chrono::Chrono().get_time_with_format("%a %b %d, %Y @ %H:%M:%S");
+        std::string line = format_log_line(message, level, timestamp, location.file_name(),
+                                           static_cast<uint32_t>(location.line()));
+
+        {
+            std::lock_guard<std::mutex> guard(impl->mutex);
+            impl->buffer.push(std::move(line));
+        }
+        impl->cv.notify_one();
+    }
+
+    void Logger::flush() const
+    {
+        std::vector<std::string> batch;
+        {
+            std::lock_guard<std::mutex> guard(impl->mutex);
+            batch = impl->buffer.swap_out();
+        }
+        write_batch(batch);
+    }
+
+    void Logger::shutdown() const
+    {
+        if (impl->shut_down)
+        {
+            return;
+        }
+        impl->shut_down = true;
+
+        {
+            std::lock_guard<std::mutex> guard(impl->mutex);
+            impl->stop_requested = true;
+        }
+        impl->cv.notify_one();
+
+        if (impl->writer_thread.joinable())
+        {
+            impl->writer_thread.join();
+        }
+
+        flush();
+    }
 }

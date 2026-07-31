@@ -36,27 +36,27 @@ TEST(UtilsTest, GetAlgebraicNotation_InvalidInput)
 
 TEST(UtilsTest, LogThrowError_NoThrow)
 {
-    EXPECT_NO_THROW(LOG_THROW_ERROR("This is a test error", false));
+    EXPECT_NO_THROW(utils::log_throw_error("This is a test error", false));
 }
 
 TEST(UtilsTest, LogThrowError_WithThrow)
 {
-    EXPECT_THROW(LOG_THROW_ERROR("This is a test error", true), std::runtime_error);
+    EXPECT_THROW(utils::log_throw_error("This is a test error", true), std::runtime_error);
 }
 
 TEST(UtilsTest, LogThrowError_NullError)
 {
-    EXPECT_THROW(LOG_THROW_ERROR("", true), std::runtime_error);
+    EXPECT_THROW(utils::log_throw_error("", true), std::runtime_error);
 }
 
 TEST(UtilsTest, LogThrowError_EmptyError)
 {
-    EXPECT_THROW(LOG_THROW_ERROR("", true), std::runtime_error);
+    EXPECT_THROW(utils::log_throw_error("", true), std::runtime_error);
 }
 
 TEST(UtilsTest, LogThrowError_EmptyErrorNoThrow)
 {
-    EXPECT_NO_THROW(LOG_THROW_ERROR("", false));
+    EXPECT_NO_THROW(utils::log_throw_error("", false));
 }
 TEST(UtilsTest, ParseAlgebraicNotation_ValidInput)
 {
