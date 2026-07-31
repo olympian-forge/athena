@@ -24,22 +24,12 @@
 #include <algorithm>
 #ifdef _WIN32
 #define NOMINMAX
-/* logger.h defines an ERROR() macro; wingdi.h (pulled in transitively by
- * the DirectML header) defines ERROR too, which is a fatal C4005 under
- * /WX. NOGDI excludes the GDI section of wingdi.h — DirectML/D3D12 don't
- * need it — leaving the logger macro intact. */
-#define NOGDI
 #include <dml_provider_factory.h>
 #endif
 
 namespace nn
 {
-    /**
-     * Loads the ONNX model, and starts the batch worker thread. batch_timeout_ms
-     * is supplied by the caller (the auto-tuner measures it once via
-     * measure_latency_ms() and persists it) rather than self-calibrated here,
-     * since this constructor runs on every NN instantiation.
-     */
+
     NN::NN(const std::string &onnx_file_path, int gpu, size_t batch_size, int batch_timeout_ms)
         : onnx_file_path(onnx_file_path), batch_size(batch_size), gpu(gpu), batch_timeout_ms(batch_timeout_ms), stop_worker(false)
     {
@@ -409,7 +399,7 @@ namespace nn
                      * matching the CUDA path below. WARN, not CRITICAL:
                      * running on CPU is a supported configuration, not a
                      * fault, and CRITICAL should stay meaningful. */
-                    logger::WARN(error);
+                    logger::warn(error);
                 }
 #else
                 /* CPU-only ONNX Runtime packages ship no CUDA provider at all,
@@ -457,7 +447,7 @@ namespace nn
                         std::string error = "Could not enable CUDA for GPU " + std::to_string(gpu) + ". Falling back to CPU. ";
                         error += "ONNX Runtime error: " + std::string(e.what());
                         std::cerr << error << "\n";
-                        logger::WARN(error);
+                        logger::warn(error);
                     }
                 }
                 // LCOV_EXCL_STOP
@@ -474,7 +464,7 @@ namespace nn
             {
                 std::string error = "Failed to reload ONNX model: " + std::string(e.what());
                 std::cerr << error << "\n";
-                logger::CRITICAL(error);
+                logger::critical(error);
             }
         }
     }

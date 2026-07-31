@@ -63,18 +63,14 @@ namespace chess
 
         this->build_board(fen.get_placement());
 
-        /* DEBUG, not INFO: constructed per thread-engine in the search hot
-         * path; INFO would cost a filesystem write per construction. */
-        logger::DEBUG("Board initialized with FEN: " + fen.get_placement());
+        logger::debug("Board initialized with FEN: " + fen.get_placement());
     }
 
-    /* Private */
     void Board::build_board(const std::string &placement)
     {
         size_t size = placement.size();
         uint8_t rank = BOARD_SIZE - 1, file = 0;
 
-        /* Clear bitboards and occupancy */
         for (int i = 0; i < 12; ++i)
         {
             this->bitboards[i] = 0ULL;
@@ -157,7 +153,6 @@ namespace chess
 
     UndoState Board::apply_move(const Move &move)
     {
-        /* Save state snapshot */
         UndoState state;
         for (int i = 0; i < 12; ++i)
         {
@@ -182,19 +177,17 @@ namespace chess
         char active_piece = this->get_piece(from_rank, from_file);
         if (active_piece == '\0')
         {
-            return state; /* No active piece */
+            return state;
         }
 
         bool active_is_white = std::isupper(static_cast<unsigned char>(active_piece));
         int active_bb_idx = get_bitboard_index(active_piece);
 
-        /* Clear EP square */
         this->en_passant_square = 64;
         this->en_passant_dirty = true;
 
         MoveType mt = move.get_move_type();
 
-        /* Remove captured piece from destination */
         if (mt == MoveType::CAPTURE)
         {
             char target_piece = this->get_piece(to_rank, to_file);
@@ -217,7 +210,6 @@ namespace chess
         }
         else if (mt == MoveType::EN_PASSANT)
         {
-            /* Remove captured EP pawn */
             uint8_t ep_file = to_file;
             uint8_t ep_pawn_rank = from_rank;
             uint8_t ep_pawn_sq = static_cast<uint8_t>(ep_pawn_rank * 8 + ep_file);
@@ -238,7 +230,6 @@ namespace chess
         }
         else if (mt == MoveType::CASTLE_KINGSIDE)
         {
-            /* Move rook: H to F (kingside castle) */
             uint8_t rook_from_sq = static_cast<uint8_t>(from_rank * 8 + 7); /* h-file */
             uint8_t rook_to_sq = static_cast<uint8_t>(from_rank * 8 + 5);   /* f-file */
             char rook_char = active_is_white ? 'R' : 'r';
@@ -261,7 +252,6 @@ namespace chess
         }
         else if (mt == MoveType::CASTLE_QUEENSIDE)
         {
-            /* Move rook: A to D (queenside castle) */
             uint8_t rook_from_sq = static_cast<uint8_t>(from_rank * 8 + 0); /* a-file */
             uint8_t rook_to_sq = static_cast<uint8_t>(from_rank * 8 + 3);   /* d-file */
             char rook_char = active_is_white ? 'R' : 'r';
@@ -283,14 +273,11 @@ namespace chess
             }
         }
 
-        /* Move active piece */
         if (active_bb_idx >= 0)
         {
-            /* Perform pawn promotion */
             if (mt == MoveType::PROMOTION)
             {
                 char prom_char = move.get_promotion_piece();
-                /* Match piece color case */
                 if (active_is_white)
                 {
                     prom_char = static_cast<char>(std::toupper(static_cast<unsigned char>(prom_char)));
@@ -301,10 +288,8 @@ namespace chess
                 }
                 int prom_bb_idx = get_bitboard_index(prom_char);
 
-                /* Remove pawn from source square */
                 clear_bit(this->bitboards[active_bb_idx], from_sq);
 
-                /* Clear destination square */
                 char target_at_dest = this->get_piece(to_rank, to_file);
                 if (target_at_dest != '\0')
                 {
@@ -323,13 +308,11 @@ namespace chess
                     }
                 }
 
-                /* Place promotion piece */
                 if (prom_bb_idx >= 0)
                 {
                     set_bit(this->bitboards[prom_bb_idx], to_sq);
                 }
 
-                /* Update occupancy bitboards */
                 if (active_is_white)
                 {
                     clear_bit(this->white_occupancy, from_sq);
@@ -358,7 +341,6 @@ namespace chess
             }
         }
 
-        /* Set EP square on double pawn push */
         if (std::tolower(static_cast<unsigned char>(active_piece)) == 'p' &&
             std::abs(static_cast<int>(to_rank) - static_cast<int>(from_rank)) == 2)
         {
@@ -366,8 +348,6 @@ namespace chess
             this->en_passant_dirty = true;
         }
 
-        /* Update castling rights */
-        /* Revoke castling rights on king move */
         if (std::tolower(static_cast<unsigned char>(active_piece)) == 'k')
         {
             if (active_is_white)
@@ -382,9 +362,7 @@ namespace chess
             }
         }
 
-        /* Revoke castling rights on rook move or capture */
         {
-            /* White kingside rook H1 */
             if (from_sq == 7 || to_sq == 7)
             {
                 if (this->castling_rights & CASTLE_K)
@@ -393,7 +371,7 @@ namespace chess
                     this->castling_dirty = true;
                 }
             }
-            /* White queenside rook A1 */
+
             if (from_sq == 0 || to_sq == 0)
             {
                 if (this->castling_rights & CASTLE_Q)
@@ -402,7 +380,7 @@ namespace chess
                     this->castling_dirty = true;
                 }
             }
-            /* Black kingside rook H8 */
+
             if (from_sq == 63 || to_sq == 63)
             {
                 if (this->castling_rights & CASTLE_k)
@@ -411,7 +389,7 @@ namespace chess
                     this->castling_dirty = true;
                 }
             }
-            /* Black queenside rook A8 */
+
             if (from_sq == 56 || to_sq == 56)
             {
                 if (this->castling_rights & CASTLE_q)
@@ -424,10 +402,8 @@ namespace chess
 
         this->combined_occupancy = this->white_occupancy | this->black_occupancy;
 
-        /* Toggle active color */
         this->color = (this->color == WHITE) ? BLACK : WHITE;
 
-        /* Update move counters */
         if (std::tolower(static_cast<unsigned char>(active_piece)) == 'p' ||
             mt == MoveType::CAPTURE || mt == MoveType::EN_PASSANT || mt == MoveType::PROMOTION)
         {
@@ -438,7 +414,7 @@ namespace chess
             this->half_move_clock = static_cast<uint8_t>(this->half_move_clock + 1);
         }
 
-        if (this->color == WHITE) /* after toggle, if now white it means black just moved */
+        if (this->color == WHITE)
         {
             this->full_moves = static_cast<uint16_t>(this->full_moves + 1);
         }
@@ -496,10 +472,6 @@ namespace chess
         return (1ULL << this->en_passant_square);
     }
 
-    /**
-     * @brief Generate FEN notation of current board position.
-     * @returns Full FEN string.
-     */
     std::string Board::get_fen(void)
     {
         fen.set_placement(this->generate_placement_from_board());
@@ -543,16 +515,13 @@ namespace chess
         return '\0';
     }
 
-    /* Check detection — uses precomputed attack tables */
-
     bool Board::is_in_check(uint8_t clr) const
     {
-        /* Find king square */
         int king_bb_idx = (clr == WHITE) ? 5 : 11;
         uint64_t king_bb = this->bitboards[king_bb_idx];
         if (king_bb == 0ULL)
         {
-            return false; /* No king on board */
+            return false;
         }
         uint8_t king_square = chess::bitscan_forward(king_bb);
         uint8_t opponent = (clr == WHITE) ? BLACK : WHITE;
@@ -561,8 +530,6 @@ namespace chess
 
     bool Board::is_square_attacked_by(uint8_t square, uint8_t attacker_color) const
     {
-        /* Attacker piece indices */
-        /* White: 0-5 (P, N, B, R, Q, K), Black: 6-11 (p, n, b, r, q, k) */
         int pawn_idx = (attacker_color == WHITE) ? 0 : 6;
         int knight_idx = (attacker_color == WHITE) ? 1 : 7;
         int bishop_idx = (attacker_color == WHITE) ? 2 : 8;
@@ -570,7 +537,6 @@ namespace chess
         int queen_idx = (attacker_color == WHITE) ? 4 : 10;
         int king_idx = (attacker_color == WHITE) ? 5 : 11;
 
-        /* Pawn attacks */
         uint8_t defender_color = (attacker_color == WHITE) ? BLACK : WHITE;
         uint64_t pawn_attack_mask = PAWN_ATTACKS[defender_color][square];
         if (pawn_attack_mask & this->bitboards[pawn_idx])
@@ -578,29 +544,25 @@ namespace chess
             return true;
         }
 
-        /* Knight attacks */
         if (KNIGHT_ATTACKS[square] & this->bitboards[knight_idx])
         {
             return true;
         }
 
-        /* King attacks */
         if (KING_ATTACKS[square] & this->bitboards[king_idx])
         {
             return true;
         }
 
-        /* Bishop diagonal attacks */
         {
             uint64_t bishops = this->bitboards[bishop_idx] | this->bitboards[queen_idx];
-            /* Check diagonal ray directions */
+
             for (int dir : {RAY_NE, RAY_SE, RAY_SW, RAY_NW})
             {
                 uint64_t ray = RAY[square][dir];
                 uint64_t blockers = ray & this->combined_occupancy;
                 if (blockers)
                 {
-                    /* Find first blocker on ray */
                     uint8_t first_blocker;
                     if (dir == RAY_NE || dir == RAY_N || dir == RAY_NW || dir == RAY_E)
                     {
@@ -618,7 +580,6 @@ namespace chess
             }
         }
 
-        /* Rook orthogonal attacks */
         {
             uint64_t rooks = this->bitboards[rook_idx] | this->bitboards[queen_idx];
             for (int dir : {RAY_N, RAY_E, RAY_S, RAY_W})
@@ -724,7 +685,7 @@ namespace chess
         this->half_move_clock = static_cast<uint8_t>(fen.get_half_move_clock());
         this->full_moves = static_cast<uint16_t>(fen.get_full_moves());
         this->build_board(fen.get_placement());
-        logger::INFO("Board reset to FEN: " + fen_string);
+        logger::info("Board reset to FEN: " + fen_string);
     }
 
     void Board::undo_move(const UndoState &state)
@@ -745,4 +706,4 @@ namespace chess
         this->full_moves = state.full_moves;
     }
 
-} /* namespace chess */
+}

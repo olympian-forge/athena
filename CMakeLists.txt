@@ -371,6 +371,7 @@ if(ENABLE_TESTING)
         tests/unit/move.test.cpp
         tests/unit/moves.test.cpp
         tests/unit/logger.test.cpp
+        tests/unit/logger_internal.test.cpp
         tests/unit/chrono.test.cpp
         tests/unit/modifier.test.cpp
         tests/unit/pgn.test.cpp

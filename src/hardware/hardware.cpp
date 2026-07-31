@@ -148,6 +148,11 @@ namespace hardware
         return platform::get_effective_cpu_limit();
     }
 
+    uint64_t get_effective_memory_limit()
+    {
+        return platform::get_effective_memory_limit();
+    }
+
     HostInfo detect_host_info()
     {
         return HostInfo(platform::get_cpus(), platform::get_gpus(), platform::get_ram(), platform::get_os());
