@@ -475,6 +475,39 @@ TEST_F(EngineTest, GetTerminalStateDetectsThreefoldRepetition)
     EXPECT_DOUBLE_EQ(state.score, 0.5);
 }
 
+/**
+ * Search threads clone the root Engine via this copy constructor instead of
+ * round-tripping through get_fen(); repetition detection depends on move
+ * history surviving that clone, not just board state, so this checks both:
+ * the copy sees the pre-copy history, and the original stays unaffected by
+ * whatever the copy does afterward.
+ */
+TEST_F(EngineTest, CopyConstructorPreservesHistoryAndIsIndependent)
+{
+    chess::Engine original;
+    original.make_move(chess::Move("g1", "f3"));
+    original.make_move(chess::Move("g8", "f6"));
+    original.make_move(chess::Move("f3", "g1"));
+    original.make_move(chess::Move("f6", "g8"));
+    original.make_move(chess::Move("g1", "f3"));
+    original.make_move(chess::Move("g8", "f6"));
+    EXPECT_FALSE(original.get_terminal_state().is_terminal);
+
+    chess::Engine copy(original);
+
+    /* Completing the repetition on the copy must see the position history
+     * from before the copy, proving history -- not just board state --
+     * was carried over. */
+    copy.make_move(chess::Move("f3", "g1"));
+    copy.make_move(chess::Move("f6", "g8"));
+    EXPECT_TRUE(copy.get_terminal_state().is_terminal);
+
+    /* The original never played that final repeating pair, so it must not
+     * see the draw the copy now does. */
+    EXPECT_FALSE(original.get_terminal_state().is_terminal);
+    EXPECT_NE(copy.get_fen(), original.get_fen());
+}
+
 TEST_F(EngineTest, MakeMoveFast)
 {
     engine.make_move_fast(chess::Move("e2", "e4"));

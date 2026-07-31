@@ -138,7 +138,11 @@ namespace chess
         explicit Board(const std::string &fen_string);
         ~Board() = default;
 
-        Board(const Board &) = delete;
+        /* Every member is fixed-size, plain data (bitboards, counters, a
+         * Fen) -- a memberwise copy is cheap and always independent, unlike
+         * cloning via a FEN string round-trip (regex parse + full chess-rule
+         * validation), which search threads previously paid on every move. */
+        Board(const Board &) = default;
         Board &operator=(const Board &) = delete;
         Board(Board &&) = delete;
         Board &operator=(Board &&) = delete;

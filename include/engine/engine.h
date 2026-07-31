@@ -39,6 +39,12 @@ namespace chess
         Engine(const std::string &fen_string = DEFAULT_FEN);
         ~Engine();
 
+        /* Cheap, independent duplicate of an already-valid position --
+         * no FEN parsing or chess-rule validation, unlike constructing a
+         * new Engine from get_fen(). Search threads use this to clone the
+         * root position instead of round-tripping through a string. */
+        Engine(const Engine &) = default;
+
         /**
          * @brief Generate all legal moves for the side to move.
          * @returns Vector of all legal moves in the current position.
@@ -63,21 +69,6 @@ namespace chess
          * @returns Full FEN string.
          */
         std::string get_fen(void);
-
-        /**
-         * @brief Get the undo-state history of all moves made on this engine.
-         * @returns Const reference to the undo stack, oldest state first.
-         */
-        const std::vector<UndoState> &get_history() const { return undo_stack; }
-
-        /**
-         * @brief Seed this engine's undo-state history from another engine,
-         * so repetition detection in get_terminal_state() can see positions
-         * that occurred before this engine's starting FEN (e.g., search
-         * threads inheriting the game history).
-         * @param history Undo states to copy in, oldest first.
-         */
-        void set_history(const std::vector<UndoState> &history) { undo_stack = history; }
 
         /**
          * @brief Get combined terminal state information in a single query.

@@ -109,6 +109,22 @@ TEST_F(BoardTest, MovePawnAndEnPassantIsCleared)
     EXPECT_EQ(board.get_en_passant(), "");
 }
 
+TEST_F(BoardTest, CopyConstructorIsIndependentOfOriginal)
+{
+    chess::Board original(valid_fen_position);
+    chess::Board copy(original);
+
+    copy.apply_move(chess::Move("a2", "a4"));
+
+    /* The copy reflects the move... */
+    EXPECT_EQ(copy.get_piece(3, 0), 'P');
+    EXPECT_EQ(copy.get_piece(1, 0), '\0');
+
+    /* ...but the original is untouched. */
+    EXPECT_EQ(original.get_piece(1, 0), 'P');
+    EXPECT_EQ(original.get_piece(3, 0), '\0');
+}
+
 TEST_F(BoardTest, GetPieceCharOutOfBounds)
 {
     chess::Board board(valid_fen_position);

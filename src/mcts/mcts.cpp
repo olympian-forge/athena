@@ -361,9 +361,7 @@ namespace mcts
 
     std::unique_ptr<chess::Engine> Tree::make_thread_engine(chess::Engine &engine)
     {
-        auto thread_engine = std::make_unique<chess::Engine>(engine.get_fen());
-        thread_engine->set_history(engine.get_history());
-        return thread_engine;
+        return std::make_unique<chess::Engine>(engine);
     }
 
     Tree::~Tree() = default;
