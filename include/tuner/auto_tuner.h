@@ -30,8 +30,16 @@ namespace tuner
      * allocator growth) and the timed windows then measure steady state --
      * previously the first config's timed run silently paid those costs. */
     const int BENCHMARK_WARMUP_MS = 2000;
-    const int BENCHMARK_RUN_MS = 5000;
-    const int BENCHMARK_TIMED_RUNS = 2;
+    /* TEMPORARY DIAGNOSTIC (revert after use): 50ms x 200 runs = the same
+     * 10,000ms total measured time as the original 5000ms x 2, but chopped
+     * into short bursts -- each benchmark_search() call builds a fresh root
+     * Node and fresh thread engines, the same reset real self-play pays every
+     * move. If peak NPS here drops toward self-play's observed ~2,900 (from
+     * this same code path's normal ~17,341 one long-window figure), that
+     * confirms short-burst overhead, not anything specific to self-play's own
+     * code, is the real cost. */
+    const int BENCHMARK_RUN_MS = 50;
+    const int BENCHMARK_TIMED_RUNS = 200;
 
     /* Games/hour projection inputs. 800 simulations/move matches the
      * --selfplay default; 99 plies is the measured average game length over
