@@ -16,6 +16,7 @@
  */
 
 #include "include/tuner/utilization.h"
+#include "include/hardware/hardware.h"
 
 #include <algorithm>
 
@@ -258,7 +259,15 @@ namespace tuner
         double cpu_seconds_now = process_cpu_seconds();
         if (cpu_seconds_at_begin >= 0.0 && cpu_seconds_now >= 0.0 && wall_seconds > 0.0)
         {
-            double capacity = static_cast<double>(std::max(1u, std::thread::hardware_concurrency()));
+            /* hardware_concurrency() reports the host's total logical cores,
+             * blind to any cgroup CPU quota -- on a throttled container that
+             * silently understates the percentage by host/quota, exactly the
+             * mismatch between this tool and RunPod's own dashboard. Prefer
+             * the effective (cgroup/affinity) limit when one is detected. */
+            uint32_t effective_limit = hardware::get_effective_cpu_limit();
+            double capacity = effective_limit > 0
+                                   ? static_cast<double>(effective_limit)
+                                   : static_cast<double>(std::max(1u, std::thread::hardware_concurrency()));
             cpu_result = 100.0 * (cpu_seconds_now - cpu_seconds_at_begin) / (wall_seconds * capacity);
         }
 
