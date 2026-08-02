@@ -35,13 +35,15 @@
  * COVERAGE EXCLUSION -- this whole file is outside the 100% line-coverage gate.
  *
  * AutoTuner is a benchmark harness: benchmark_config() builds a real nn::NN and
- * mcts::Tree and measures them for BENCHMARK_WARMUP_MS + BENCHMARK_TIMED_RUNS *
- * BENCHMARK_RUN_MS -- 12 seconds per call as configured. run() calls it 20+
- * times across its batch-size, thread-count and refinement sweeps, so one run()
- * is 4+ minutes of live inference against whatever hardware is present. There is
- * no way to unit test "measure this configuration" without doing the measuring,
- * and shrinking the constants for tests would mean a test-only seam in shipped
- * code, which this codebase deliberately avoids.
+ * mcts::Tree, runs BENCHMARK_WARMUP_MS of continuous warmup, then calls
+ * find_best_move_with_policy() BENCHMARK_TIMED_RUNS times -- the same function
+ * self-play calls once per move, at the real per-move simulation count. run()
+ * calls it 20+ times across its batch-size, thread-count and refinement
+ * sweeps, so one run() is several minutes of live inference against whatever
+ * hardware is present. There is no way to unit test "measure this
+ * configuration" without doing the measuring, and shrinking the constants for
+ * tests would mean a test-only seam in shipped code, which this codebase
+ * deliberately avoids.
  *
  * TODO(#9): re-admit this file to the gate once run() is decomposed.
  *   Issue #9 "Extract functions from the largest bodies"
@@ -178,7 +180,9 @@ namespace tuner
             mcts::Tree search(evaluator.get(), search_threads, pipeline_target);
             chess::Engine engine(BENCHMARK_KIWIPETE_FEN);
 
-            /* Untimed warmup so the timed windows measure steady state. */
+            /* Untimed continuous warmup so the timed, per-move-shaped runs
+             * below measure steady state rather than paying one-time CUDA/
+             * cuDNN setup costs themselves. */
             search.benchmark_search(engine, BENCHMARK_WARMUP_MS);
 
             UtilizationMonitor monitor(baseline_tuning_parameters.get_gpu_id(0), gpu_is_nvidia);
@@ -189,10 +193,14 @@ namespace tuner
             for (int run = 0; run < BENCHMARK_TIMED_RUNS; ++run)
             {
                 auto start = std::chrono::steady_clock::now();
-                int nodes_evaluated = search.benchmark_search(engine, BENCHMARK_RUN_MS);
+                /* The exact function self-play calls once per move: fresh
+                 * root, fresh thread engines, fixed simulation count -- not
+                 * benchmark_search()'s continuous wall-clock window, which
+                 * measures a workload shape self-play never actually runs. */
+                search.find_best_move_with_policy(engine, ESTIMATE_SIMULATIONS_PER_MOVE, /*apply_noise=*/true);
                 auto end = std::chrono::steady_clock::now();
 
-                total_nodes += static_cast<double>(nodes_evaluated);
+                total_nodes += static_cast<double>(ESTIMATE_SIMULATIONS_PER_MOVE);
                 total_ms += std::chrono::duration<double, std::milli>(end - start).count();
             }
             monitor.end();
