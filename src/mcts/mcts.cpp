@@ -376,7 +376,8 @@ namespace mcts
         {
             try
             {
-                nn::Result res = evaluator->evaluate_immediate(engine.get_board_view());
+                auto future = evaluator->request_evaluation(engine.get_board_view());
+                nn::Result res = future.get();
                 root->expand(engine, res.policy);
             }
             catch (...)
@@ -435,7 +436,8 @@ namespace mcts
 
         if (evaluator)
         {
-            nn::Result res = evaluator->evaluate_immediate(engine.get_board_view());
+            auto future = evaluator->request_evaluation(engine.get_board_view());
+            nn::Result res = future.get();
             root->expand(engine, res.policy);
         }
         else
@@ -500,7 +502,8 @@ namespace mcts
         {
             try
             {
-                nn::Result res = evaluator->evaluate_immediate(engine.get_board_view());
+                auto future = evaluator->request_evaluation(engine.get_board_view());
+                nn::Result res = future.get();
                 root->expand(engine, res.policy);
             }
             catch (const std::exception &e)

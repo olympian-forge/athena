@@ -118,22 +118,6 @@ namespace nn
         return future;
     }
 
-    Result NN::evaluate_immediate(const chess::AbstractBoard &board)
-    {
-        std::vector<std::vector<float>> batch_features;
-        batch_features.push_back(board_to_tensor(board));
-
-        std::vector<std::promise<Result>> promises(1);
-        std::future<Result> future = promises[0].get_future();
-
-        {
-            std::lock_guard<std::mutex> session_lock(session_mutex);
-            evaluate_batch(batch_features, promises);
-        }
-
-        return future.get();
-    }
-
     void NN::batch_worker_loop()
     {
         while (true)
