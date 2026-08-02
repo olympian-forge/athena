@@ -77,6 +77,19 @@ namespace nn
 
         std::future<Result> request_evaluation(const chess::AbstractBoard &board);
 
+        /**
+         * @brief Evaluates a single position immediately, bypassing the
+         * shared request queue and its batch_timeout_ms wait entirely.
+         * request_evaluation() exists so many concurrent leaf evaluations
+         * can be batched together; a lone evaluation (a search's root,
+         * before any worker threads have submitted anything else) has no
+         * batch partners to wait for, so queuing it just pays up to
+         * batch_timeout_ms for nothing.
+         * @param board Position to evaluate.
+         * @returns The model's result for this position.
+         */
+        Result evaluate_immediate(const chess::AbstractBoard &board);
+
     private:
         void batch_worker_loop();
         void evaluate_batch(const std::vector<std::vector<float>> &batch_features, std::vector<std::promise<Result>> &promises);
