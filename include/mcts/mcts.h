@@ -24,6 +24,7 @@
 #include <cmath>
 #include <random>
 #include <mutex>
+#include <condition_variable>
 #include <atomic>
 #include <thread>
 #include <future>
@@ -37,6 +38,15 @@ namespace mcts
     const double DIRICHLET_ALPHA = 0.3;
 
     const int MAX_ROLLOUT_MOVES = 100;
+
+    /* Hard ceiling on real OS threads the pool will ever attempt to create,
+     * independent of the configured thread count. A misconfigured or
+     * pathological request (e.g. thousands of threads) would otherwise
+     * exhaust memory well before pthread_create ever cleanly fails --
+     * each thread reserves a default ~8MB stack, so tens of thousands of
+     * attempts can OOM the whole process before any exception is thrown.
+     * No real configuration needs anywhere near this many search threads. */
+    const size_t MAX_POOL_THREADS = 256;
 
     const double PIECE_VALUE_PAWN = 100.0;
     const double PIECE_VALUE_KNIGHT = 320.0;
@@ -120,6 +130,17 @@ namespace mcts
         std::vector<chess::Move> path_moves;
     };
 
+    /**
+     * Owns a persistent pool of num_threads worker threads and dispatches
+     * search rounds to them, rather than spawning/joining fresh OS threads
+     * on every call -- restarting the whole pool on every single move
+     * (once per ply in self-play) turned out to account for a large share
+     * of the gap between raw search throughput and real self-play
+     * throughput. All public methods must be called sequentially from one
+     * thread; the pool's dispatch state (current_round, round_engines,
+     * generation) is shared, mutable, per-round data, not safe to drive
+     * concurrently from two callers.
+     */
     class Tree
     {
     public:
@@ -140,8 +161,53 @@ namespace mcts
         void search_worker(std::unique_ptr<chess::Engine> thread_engine, Node *root, int simulations, std::chrono::steady_clock::time_point end_time, bool use_time);
         double simulate(chess::Engine &engine);
 
+        /**
+         * One round's broadcast parameters: identical for every worker
+         * dispatched into that round, published once under pool_mutex.
+         */
+        struct RoundParams
+        {
+            Node *root = nullptr;
+            int simulations = 0;
+            std::chrono::steady_clock::time_point end_time{};
+            bool use_time = false;
+        };
+
+        /**
+         * Body of each persistent pool thread: waits for either shutdown or
+         * a new round (a generation bump), runs search_worker with that
+         * round's parameters and this slot's engine clone, then signals
+         * completion. Runs until shutdown_requested.
+         */
+        void pool_worker_loop(size_t index);
+
+        /**
+         * Runs one round of search across the persistent pool -- or inline,
+         * on the calling thread, if the pool has zero live workers -- and
+         * blocks until every dispatched worker has finished. Builds each
+         * worker's Engine clone on the calling thread, in the same program
+         * order the old per-call spawn loop did, since the clone must
+         * reflect the board exactly as of this call.
+         */
+        void dispatch_round(chess::Engine &engine, Node *root, int simulations,
+                             std::chrono::steady_clock::time_point end_time, bool use_time,
+                             bool print_fallback_warning);
+
         nn::NN *evaluator;
         int num_threads;
         size_t pipeline_target;
+
+        std::vector<std::thread> pool_threads;
+        size_t pool_size = 0;
+
+        std::mutex pool_mutex;
+        std::condition_variable dispatch_cv;
+        std::condition_variable done_cv;
+        uint64_t generation = 0;
+        bool shutdown_requested = false;
+        size_t completed_in_round = 0;
+        size_t active_workers_this_round = 0;
+        RoundParams current_round;
+        std::vector<std::unique_ptr<chess::Engine>> round_engines;
     };
 }

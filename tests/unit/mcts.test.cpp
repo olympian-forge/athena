@@ -325,3 +325,68 @@ TEST_F(MCTSTest, EncoderCoversNonQueenPromotions)
     auto [best, policy] = tree.find_best_move_with_policy(promoting, 16, false);
     EXPECT_FALSE(policy.empty());
 }
+
+/**
+ * The pool must be fully reusable: two consecutive calls on the same Tree
+ * instance must each produce a valid, non-degenerate result, proving no
+ * worker thread state (generation counter, round buffers) is corrupted or
+ * left over from the first round.
+ */
+TEST_F(MCTSTest, PoolReusedAcrossConsecutiveCalls)
+{
+    auto [move1, policy1] = search.find_best_move_with_policy(engine, 40, false);
+    EXPECT_FALSE(policy1.empty());
+    EXPECT_NE(move1.get_from_square(), move1.get_to_square());
+
+    auto [move2, policy2] = search.find_best_move_with_policy(engine, 40, false);
+    EXPECT_FALSE(policy2.empty());
+    EXPECT_NE(move2.get_from_square(), move2.get_to_square());
+}
+
+/**
+ * Mixing the three public entry points on one Tree instance back-to-back
+ * exercises dispatch_round with different RoundParams shapes (use_time
+ * true/false, different simulation counts) on the same persistent pool.
+ */
+TEST_F(MCTSTest, PoolReusedAcrossDifferentEntryPoints)
+{
+    int nodes = search.benchmark_search(engine, 30);
+    EXPECT_GE(nodes, 0);
+
+    chess::Move m = search.find_best_move(engine, 30, -1);
+    EXPECT_NE(m.get_from_square(), m.get_to_square());
+
+    auto [move, policy] = search.find_best_move_with_policy(engine, 30, false);
+    EXPECT_FALSE(policy.empty());
+}
+
+/**
+ * A Tree destroyed immediately after a call returns must join every pool
+ * thread cleanly with no in-flight round -- regression guard for the
+ * shutdown-vs-in-flight-round race.
+ */
+TEST_F(MCTSTest, DestructorAfterCallJoinsCleanly)
+{
+    {
+        mcts::Tree scoped{nullptr, 3, 8};
+        Engine start;
+        scoped.find_best_move_with_policy(start, 20, false);
+    }
+    SUCCEED();
+}
+
+/**
+ * Many sequential construct/round/destroy cycles, mirroring
+ * AutoTuner::benchmark_config's repeated Tree construction, to catch any
+ * thread-count leak or double-join across repeated pool lifetimes.
+ */
+TEST_F(MCTSTest, RepeatedPoolConstructionAndTeardown)
+{
+    Engine start;
+    for (int i = 0; i < 20; ++i)
+    {
+        mcts::Tree t{nullptr, 2, 4};
+        auto [move, policy] = t.find_best_move_with_policy(start, 10, false);
+        EXPECT_FALSE(policy.empty());
+    }
+}

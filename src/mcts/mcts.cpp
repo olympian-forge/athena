@@ -357,14 +357,150 @@ namespace mcts
     }
 
     Tree::Tree(nn::NN *eval, int threads, size_t pipeline_t)
-        : evaluator(eval), num_threads(threads), pipeline_target(pipeline_t) {}
+        : evaluator(eval), num_threads(threads), pipeline_target(pipeline_t)
+    {
+        size_t attempt_count = num_threads > 0 ? static_cast<size_t>(num_threads) : 0;
+        if (attempt_count > MAX_POOL_THREADS)
+        {
+            attempt_count = MAX_POOL_THREADS;
+        }
+
+        for (size_t i = 0; i < attempt_count; ++i)
+        {
+            try
+            {
+                pool_threads.emplace_back(&Tree::pool_worker_loop, this, pool_threads.size());
+            }
+            catch (const std::exception &e)
+            {
+                std::cerr << "Pool thread creation failed: " << e.what() << "\n";
+                break;
+            }
+        }
+        pool_size = pool_threads.size();
+        round_engines.resize(pool_size);
+    }
 
     std::unique_ptr<chess::Engine> Tree::make_thread_engine(chess::Engine &engine)
     {
         return std::make_unique<chess::Engine>(engine);
     }
 
-    Tree::~Tree() = default;
+    Tree::~Tree()
+    {
+        {
+            std::lock_guard<std::mutex> lock(pool_mutex);
+            shutdown_requested = true;
+            ++generation;
+        }
+        dispatch_cv.notify_all();
+        for (auto &t : pool_threads)
+        {
+            if (t.joinable())
+            {
+                t.join();
+            }
+        }
+    }
+
+    void Tree::pool_worker_loop(size_t index)
+    {
+        uint64_t last_seen_generation = 0;
+        while (true)
+        {
+            RoundParams params;
+            std::unique_ptr<chess::Engine> my_engine;
+            {
+                std::unique_lock<std::mutex> lock(pool_mutex);
+                dispatch_cv.wait(lock, [this, last_seen_generation]
+                                  { return shutdown_requested || generation != last_seen_generation; });
+
+                if (shutdown_requested)
+                {
+                    return;
+                }
+
+                last_seen_generation = generation;
+                params = current_round;
+                my_engine = std::move(round_engines[index]);
+            }
+
+            try
+            {
+                search_worker(std::move(my_engine), params.root, params.simulations, params.end_time, params.use_time);
+            }
+            catch (const std::exception &e)
+            {
+                std::cerr << "Pool worker " << index << " search_worker threw: " << e.what() << "\n";
+            }
+            catch (...)
+            {
+                std::cerr << "Pool worker " << index << " search_worker threw an unknown exception\n";
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(pool_mutex);
+                ++completed_in_round;
+                if (completed_in_round == active_workers_this_round)
+                {
+                    done_cv.notify_one();
+                }
+            }
+        }
+    }
+
+    void Tree::dispatch_round(chess::Engine &engine, Node *root, int simulations,
+                              std::chrono::steady_clock::time_point end_time, bool use_time,
+                              bool print_fallback_warning)
+    {
+        if (pool_size == 0)
+        {
+            if (print_fallback_warning)
+            {
+                std::cerr << "Warning: Falling back to synchronous search!\n";
+            }
+            search_worker(make_thread_engine(engine), root, simulations, end_time, use_time);
+            return;
+        }
+
+        size_t built = 0;
+        try
+        {
+            for (; built < pool_size; ++built)
+            {
+                round_engines[built] = make_thread_engine(engine);
+            }
+        }
+        catch (const std::exception &e)
+        {
+            std::cerr << "Thread engine clone failed: " << e.what() << "\n";
+        }
+
+        if (built == 0)
+        {
+            if (print_fallback_warning)
+            {
+                std::cerr << "Warning: Falling back to synchronous search!\n";
+            }
+            search_worker(make_thread_engine(engine), root, simulations, end_time, use_time);
+            return;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(pool_mutex);
+            current_round = RoundParams{root, simulations, end_time, use_time};
+            active_workers_this_round = built;
+            completed_in_round = 0;
+            ++generation;
+        }
+        dispatch_cv.notify_all();
+
+        {
+            std::unique_lock<std::mutex> lock(pool_mutex);
+            done_cv.wait(lock, [this]
+                          { return completed_in_round == active_workers_this_round; });
+        }
+    }
 
     int Tree::benchmark_search(chess::Engine &engine, int time_limit_ms)
     {
@@ -390,33 +526,9 @@ namespace mcts
             root->expand(engine);
         }
 
-        std::vector<std::thread> workers;
         auto end_time = std::chrono::steady_clock::now() + std::chrono::milliseconds(std::max(1, time_limit_ms));
 
-        for (int i = 0; i < num_threads; ++i)
-        {
-            try
-            {
-                workers.emplace_back(&Tree::search_worker, this, make_thread_engine(engine), root.get(), -1, end_time, true);
-            }
-            catch (...)
-            {
-                break;
-            }
-        }
-
-        if (workers.empty())
-        {
-            search_worker(make_thread_engine(engine), root.get(), -1, end_time, true);
-        }
-        else
-        {
-            for (auto &w : workers)
-            {
-                if (w.joinable())
-                    w.join();
-            }
-        }
+        dispatch_round(engine, root.get(), -1, end_time, /*use_time=*/true, /*print_fallback_warning=*/false);
 
         return root->visits.load();
     }
@@ -448,7 +560,6 @@ namespace mcts
         if (root->children.empty())
             return empty_move;
 
-        std::vector<std::thread> workers;
         int sims_per_thread = -1;
         bool use_time = (time_limit_ms > 0);
 
@@ -461,15 +572,7 @@ namespace mcts
 
         auto end_time = std::chrono::steady_clock::now() + std::chrono::milliseconds(std::max(1, time_limit_ms));
 
-        for (int i = 0; i < num_threads; ++i)
-        {
-            workers.emplace_back(&Tree::search_worker, this, make_thread_engine(engine), root.get(), sims_per_thread, end_time, use_time);
-        }
-
-        for (auto &w : workers)
-        {
-            w.join();
-        }
+        dispatch_round(engine, root.get(), sims_per_thread, end_time, use_time, /*print_fallback_warning=*/false);
 
         chess::Move best_move(0, 0);
         int max_visits = -1;
@@ -526,35 +629,12 @@ namespace mcts
         if (root->children.empty())
             return {empty_move, {}};
 
-        std::vector<std::thread> workers;
         int sims_per_thread = num_threads > 0 ? simulations / num_threads : simulations;
         if (sims_per_thread == 0)
             sims_per_thread = 1;
 
-        for (int i = 0; i < num_threads; ++i)
-        {
-            try
-            {
-                workers.emplace_back(&Tree::search_worker, this, make_thread_engine(engine), root.get(), sims_per_thread, std::chrono::steady_clock::now(), false);
-            }
-            catch (const std::exception &e)
-            {
-                std::cerr << "Thread creation failed: " << e.what() << "\n";
-                break;
-            }
-        }
-
-        if (workers.empty())
-        {
-            std::cerr << "Warning: Falling back to synchronous search!\n";
-            search_worker(make_thread_engine(engine), root.get(), simulations, std::chrono::steady_clock::now(), false);
-        }
-
-        for (auto &w : workers)
-        {
-            if (w.joinable())
-                w.join();
-        }
+        dispatch_round(engine, root.get(), sims_per_thread, std::chrono::steady_clock::now(),
+                        /*use_time=*/false, /*print_fallback_warning=*/true);
 
         chess::Move best_move(0, 0);
         int max_visits = -1;

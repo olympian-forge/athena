@@ -377,6 +377,7 @@ if(ENABLE_TESTING)
         tests/unit/pgn.test.cpp
         tests/unit/c_api.test.cpp
         tests/unit/mcts.test.cpp
+        tests/unit/mcts_fallback.test.cpp
         tests/unit/nn.test.cpp
         tests/unit/uci.test.cpp
         tests/unit/selfplay.test.cpp
