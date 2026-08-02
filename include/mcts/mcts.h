@@ -130,6 +130,16 @@ namespace mcts
         chess::Move find_best_move(chess::Engine &engine, int time_limit_ms, int max_simulations);
         std::pair<chess::Move, std::vector<std::pair<chess::Move, double>>> find_best_move_with_policy(chess::Engine &engine, int simulations, bool apply_noise = false);
 
+        /**
+         * True if the most recently completed find_best_move()/
+         * find_best_move_with_policy() call promoted a subtree retained
+         * from the previous call rather than building a fresh root. A real
+         * diagnostic seam (not test-only): callers can log a reuse-hit
+         * rate, and tests use it directly since the retained tree is
+         * otherwise unobservable from outside Tree.
+         */
+        bool reused_tree_on_last_search() const { return last_reuse_hit; }
+
     private:
         /**
          * Builds a per-thread Engine copy of @p engine, carrying over its
@@ -140,8 +150,39 @@ namespace mcts
         void search_worker(std::unique_ptr<chess::Engine> thread_engine, Node *root, int simulations, std::chrono::steady_clock::time_point end_time, bool use_time);
         double simulate(chess::Engine &engine);
 
+        /**
+         * Attempts to reuse the tree retained from the previous call.
+         * Replays each of retained_root's direct children from a clone of
+         * retained_root_engine (the exact position retained_root was
+         * searched from) using the real, fully-validating
+         * Engine::make_move -- not make_move_fast, since this runs at most
+         * once per real move (O(legal moves), not per simulation) -- and
+         * compares the resulting FEN against @p engine's current position.
+         *
+         * On exactly one match, detaches that child (re-parented to
+         * nullptr) and returns it as the new root, discarding the rest of
+         * retained_root and every non-matching sibling subtree with it. On
+         * no match -- including an unchanged position, which naturally
+         * never matches any child's *changed* result, so
+         * benchmark_search-style repeated searches need no special case --
+         * discards retained_root and returns nullptr so the caller builds
+         * a fresh root exactly as before.
+         *
+         * Always consumes retained_root/retained_root_engine, hit or miss,
+         * so a stale tree never lingers past one failed match. Requires
+         * Tree's public methods to be called sequentially from a single
+         * thread -- true today by construction at every call site, but now
+         * load-bearing: retained_root is cross-call mutable state, unlike
+         * the function-local root it replaces.
+         */
+        std::unique_ptr<Node> try_reuse_subtree(chess::Engine &engine);
+
         nn::NN *evaluator;
         int num_threads;
         size_t pipeline_target;
+
+        std::unique_ptr<Node> retained_root;
+        std::unique_ptr<chess::Engine> retained_root_engine;
+        bool last_reuse_hit = false;
     };
 }
