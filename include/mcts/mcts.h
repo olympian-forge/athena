@@ -21,11 +21,9 @@
 #include "include/nn/nn.h"
 #include <vector>
 #include <memory>
-#include <cmath>
-#include <random>
 #include <mutex>
 #include <atomic>
-#include <thread>
+#include <chrono>
 #include <future>
 
 namespace mcts

@@ -20,7 +20,6 @@
 #include <source_location>
 #include <stdint.h>
 #include <string>
-#include <stdexcept>
 #include <unordered_map>
 #include "include/core/core.h"
 #include "include/logger/logger.h"

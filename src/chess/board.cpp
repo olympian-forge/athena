@@ -18,6 +18,7 @@
 #include "include/chess/board.h"
 #include "include/chess/attacks.h"
 #include <atomic>
+#include <iostream>
 
 namespace chess
 {

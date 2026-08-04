@@ -17,10 +17,8 @@
 
 #pragma once
 
-#include <regex>
 #include <stdint.h>
 #include <string>
-#include <unordered_map>
 #include <vector>
 #include "include/core/core.h"
 #include "include/logger/logger.h"

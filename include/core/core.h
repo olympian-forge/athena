@@ -17,7 +17,6 @@
 
 #pragma once
 
-#include <unordered_map>
 #include <cstdint>
 
 #ifdef _MSC_VER

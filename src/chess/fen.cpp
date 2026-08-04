@@ -16,6 +16,7 @@
  */
 
 #include "include/chess/fen.h"
+#include <regex>
 #include <sstream>
 
 namespace chess
