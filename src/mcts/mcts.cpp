@@ -357,7 +357,8 @@ namespace mcts
     }
 
     Tree::Tree(nn::NN *eval, int threads, size_t pipeline_t)
-        : evaluator(eval), num_threads(threads), pipeline_target(pipeline_t) {}
+        : evaluator(eval), num_threads(threads), pipeline_target(pipeline_t),
+          retained_root(nullptr), retained_root_engine(nullptr), last_reuse_hit(false) {}
 
     std::unique_ptr<chess::Engine> Tree::make_thread_engine(chess::Engine &engine)
     {
@@ -367,6 +368,78 @@ namespace mcts
     }
 
     Tree::~Tree() = default;
+
+    std::unique_ptr<Node> Tree::try_reuse_subtree(chess::Engine &engine)
+    {
+        if (!retained_root || !retained_root_engine)
+        {
+            retained_root.reset();
+            retained_root_engine.reset();
+            return nullptr;
+        }
+
+        const std::string current_fen = engine.get_fen();
+        std::unique_ptr<chess::Engine> probe = make_thread_engine(*retained_root_engine);
+
+        int match_index = -1;
+        for (size_t i = 0; i < retained_root->children.size(); ++i)
+        {
+            Node *candidate = retained_root->children[i].get();
+
+            try
+            {
+                probe->make_move(candidate->move);
+            }
+            catch (const std::exception &e)
+            {
+                /*
+                 * candidate->move was generated as a legal move for
+                 * retained_root_engine's exact position by expand(), so a
+                 * validation failure here would mean the snapshot and the
+                 * tree have desynced -- a bug elsewhere, not a real-world
+                 * case. Skip the candidate rather than let it corrupt reuse.
+                 */
+                std::cerr << "Tree reuse candidate replay failed: " << e.what() << "\n"; // LCOV_EXCL_LINE
+                continue;                                                                // LCOV_EXCL_LINE
+            }
+
+            bool is_match = (probe->get_fen() == current_fen);
+            probe->undo_move();
+
+            if (is_match)
+            {
+                if (match_index != -1)
+                {
+                    /*
+                     * Two distinct legal moves from the same position can
+                     * never reach an identical resulting position, so this
+                     * is unreachable; refuse to guess rather than silently
+                     * promote the wrong line if it ever happens.
+                     */
+                    std::cerr << "Tree reuse: ambiguous match, discarding retained tree\n"; // LCOV_EXCL_LINE
+                    match_index = -2;                                                       // LCOV_EXCL_LINE
+                    break;                                                                  // LCOV_EXCL_LINE
+                }
+                match_index = static_cast<int>(i);
+            }
+        }
+
+        std::unique_ptr<Node> promoted;
+        if (match_index >= 0)
+        {
+            promoted = std::move(retained_root->children[static_cast<size_t>(match_index)]);
+            promoted->parent = nullptr;
+            /* Already guaranteed 0 by search_worker's guard-clears-before-
+             * backpropagate invariant for every path in every prior batch;
+             * kept as free, provably-redundant insurance rather than a fix
+             * for a real hazard. */
+            promoted->virtual_loss.store(0);
+        }
+
+        retained_root.reset();
+        retained_root_engine.reset();
+        return promoted;
+    }
 
     int Tree::benchmark_search(chess::Engine &engine, int time_limit_ms)
     {
@@ -432,19 +505,26 @@ namespace mcts
      */
     chess::Move Tree::find_best_move(chess::Engine &engine, int time_limit_ms, int max_simulations)
     {
-        uint8_t root_color = engine.get_board_view().get_color();
         chess::Move empty_move(0, 0);
-        auto root = std::make_unique<Node>(nullptr, empty_move, root_color);
 
-        if (evaluator)
+        std::unique_ptr<Node> root = try_reuse_subtree(engine);
+        last_reuse_hit = (root != nullptr);
+
+        if (!root)
         {
-            auto future = evaluator->request_evaluation(engine.get_board_view());
-            nn::Result res = future.get();
-            root->expand(engine, res.policy);
-        }
-        else
-        {
-            root->expand(engine);
+            uint8_t root_color = engine.get_board_view().get_color();
+            root = std::make_unique<Node>(nullptr, empty_move, root_color);
+
+            if (evaluator)
+            {
+                auto future = evaluator->request_evaluation(engine.get_board_view());
+                nn::Result res = future.get();
+                root->expand(engine, res.policy);
+            }
+            else
+            {
+                root->expand(engine);
+            }
         }
 
         if (root->children.empty())
@@ -491,34 +571,55 @@ namespace mcts
         int score_cp = static_cast<int>((best_score - 0.5) * 200);
         std::cout << "info depth " << max_depth << " nodes " << total_nodes << " score cp " << score_cp << " pv " << best_move.to_uci_notation() << std::endl;
 
+        retained_root_engine = make_thread_engine(engine);
+        retained_root = std::move(root);
+
         return best_move;
     }
 
     std::pair<chess::Move, std::vector<std::pair<chess::Move, double>>> Tree::find_best_move_with_policy(chess::Engine &engine, int simulations, bool apply_noise)
     {
-        uint8_t root_color = engine.get_board_view().get_color();
         chess::Move empty_move(0, 0);
-        auto root = std::make_unique<Node>(nullptr, empty_move, root_color);
 
-        if (evaluator)
+        std::unique_ptr<Node> root = try_reuse_subtree(engine);
+        last_reuse_hit = (root != nullptr);
+
+        if (!root)
         {
-            try
+            uint8_t root_color = engine.get_board_view().get_color();
+            root = std::make_unique<Node>(nullptr, empty_move, root_color);
+
+            if (evaluator)
             {
-                auto future = evaluator->request_evaluation(engine.get_board_view());
-                nn::Result res = future.get();
-                root->expand(engine, res.policy);
+                try
+                {
+                    auto future = evaluator->request_evaluation(engine.get_board_view());
+                    nn::Result res = future.get();
+                    root->expand(engine, res.policy);
+                }
+                catch (const std::exception &e)
+                {
+                    (void)e;
+                    std::cerr << "Root evaluation failed: " << e.what() << "\n";
+                    root->expand(engine);
+                }
             }
-            catch (const std::exception &e)
+            else
             {
-                (void)e;
-                std::cerr << "Root evaluation failed: " << e.what() << "\n";
                 root->expand(engine);
             }
         }
-        else
-        {
-            root->expand(engine);
-        }
+        /* else: root was promoted from the retained tree. It's already
+         * expanded with real NN-derived priors and visits/win_score
+         * accumulated from when it was a leaf in the previous search
+         * (standard AlphaZero-style tree reuse: that prior search effort
+         * remains valid information, so it's kept rather than reset) --
+         * unless it's a terminal position (e.g. the played move delivered
+         * checkmate), in which case it's un-expanded with empty children,
+         * handled uniformly by the children.empty() check below exactly
+         * like a fresh terminal root would be. A long-retained line's
+         * priors can also reflect a stale NN generation across a hot
+         * model-reload; accepted trade-off, same as LC0. */
 
         if (apply_noise)
         {
@@ -563,6 +664,17 @@ namespace mcts
         std::vector<std::pair<chess::Move, double>> policy;
         double total_visits = root->visits.load();
 
+        /* On a promoted (reused) root, sum(policy) can fall short of 1.0 by
+         * at most one child's worth of "1 / total_visits": the very first
+         * simulation that ever expanded this node -- back when it was a
+         * deeper leaf in an earlier round, before it was promoted here --
+         * incremented only its own visit count, since its children didn't
+         * exist yet at that moment. That single, one-time-per-node
+         * shortfall is a pre-existing property of lazy node expansion; it
+         * was never observable before reuse because a fresh root was
+         * always eagerly expanded before search began. Negligible at
+         * self-play's real simulation counts (~800) and harmless for
+         * temperature sampling, which normalizes its own weights. */
         for (auto &child : root->children)
         {
             int v = child->visits.load();
@@ -573,6 +685,15 @@ namespace mcts
                 best_move = child->move;
             }
         }
+
+        /* engine is only ever read in this function (get_fen/get_history
+         * via make_thread_engine), never mutated, so it's still exactly
+         * the pre-move position root's children were generated from --
+         * matching what try_reuse_subtree expects retained_root_engine to
+         * mean on the next call. */
+        retained_root_engine = make_thread_engine(engine);
+        retained_root = std::move(root);
+
         return {best_move, policy};
     }
 

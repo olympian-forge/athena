@@ -19,6 +19,8 @@
 #include "include/mcts/mcts.h"
 #include "include/engine/engine.h"
 #include "include/nn/nn.h"
+#include <cmath>
+#include <random>
 
 using namespace chess;
 
@@ -324,4 +326,181 @@ TEST_F(MCTSTest, EncoderCoversNonQueenPromotions)
 
     auto [best, policy] = tree.find_best_move_with_policy(promoting, 16, false);
     EXPECT_FALSE(policy.empty());
+}
+
+/*
+ * Tree reuse across moves: find_best_move_with_policy()/find_best_move()
+ * retain the searched subtree and, when the next call's position is a
+ * genuine one-ply continuation, promote the matching child as the new
+ * root instead of rebuilding from scratch. reused_tree_on_last_search()
+ * exposes which path the most recent call took.
+ */
+
+/* A real move applied between two calls on the same Tree is the exact
+ * cross-call pattern self-play uses every ply. */
+TEST_F(MCTSTest, ReusesSubtreeAfterRealMove)
+{
+    auto [first_move, first_policy] = search.find_best_move_with_policy(engine, 40, false);
+    ASSERT_FALSE(first_policy.empty());
+    EXPECT_FALSE(search.reused_tree_on_last_search());
+
+    engine.make_move(first_move);
+
+    auto [second_move, second_policy] = search.find_best_move_with_policy(engine, 40, false);
+    EXPECT_TRUE(search.reused_tree_on_last_search());
+    EXPECT_FALSE(second_policy.empty());
+}
+
+/**
+ * Two distinct promotion choices from the same pawn share from/to squares,
+ * so the reuse match has to disambiguate on resulting position, not just
+ * "a move exists from a7 to a8." Deliberately plays the non-obvious
+ * under-promotion (not necessarily what the search itself ranked highest)
+ * to mirror self-play's temperature sampling, which can play any child.
+ */
+TEST_F(MCTSTest, ReusesCorrectSiblingForAmbiguousPromotion)
+{
+    Engine promoting("7k/P7/8/8/8/8/8/7K w - - 0 1");
+    mcts::Tree tree{nullptr, 1, 4};
+
+    auto [first_move, first_policy] = tree.find_best_move_with_policy(promoting, 40, false);
+    ASSERT_FALSE(first_policy.empty());
+
+    promoting.make_move(chess::Move("a7", "a8", 'N'));
+
+    auto [second_move, second_policy] = tree.find_best_move_with_policy(promoting, 40, false);
+    EXPECT_TRUE(tree.reused_tree_on_last_search());
+
+    auto legal_after = promoting.generate_all_moves();
+    for (const auto &entry : second_policy)
+    {
+        bool is_legal = false;
+        for (const auto &lm : legal_after)
+        {
+            if (entry.first.get_from_square() == lm.get_from_square() &&
+                entry.first.get_to_square() == lm.get_to_square() &&
+                entry.first.get_promotion_piece() == lm.get_promotion_piece())
+            {
+                is_legal = true;
+                break;
+            }
+        }
+        EXPECT_TRUE(is_legal);
+    }
+}
+
+/* An unrelated position (no move relationship to what was last searched,
+ * mirroring a UCI "position fen ..." jump) must not reuse stale data. */
+TEST_F(MCTSTest, FallsBackToFreshRootOnUnrelatedPosition)
+{
+    auto [first_move, first_policy] = search.find_best_move_with_policy(engine, 40, false);
+    ASSERT_FALSE(first_policy.empty());
+
+    Engine unrelated("4k3/8/8/8/8/8/8/4K3 w - - 0 1");
+    auto [second_move, second_policy] = search.find_best_move_with_policy(unrelated, 40, false);
+    EXPECT_FALSE(search.reused_tree_on_last_search());
+    EXPECT_FALSE(second_policy.empty());
+}
+
+/* Same position searched twice with nothing applied in between -- the
+ * shape benchmark_search's repeated static position would produce if it
+ * ever called into reuse (it doesn't, but the fallback still has to be
+ * correct here since no child's *changed* result can ever match an
+ * unchanged position). */
+TEST_F(MCTSTest, FallsBackToFreshRootOnUnchangedPosition)
+{
+    auto [first_move, first_policy] = search.find_best_move_with_policy(engine, 40, false);
+    ASSERT_FALSE(first_policy.empty());
+
+    auto [second_move, second_policy] = search.find_best_move_with_policy(engine, 40, false);
+    EXPECT_FALSE(search.reused_tree_on_last_search());
+    EXPECT_FALSE(second_policy.empty());
+}
+
+/* UCI's real GUI cadence advances the position by two plies between
+ * successive searches (its own move is never applied locally; the next
+ * "position ... moves ..." relays both plies at once), which reuse must
+ * safely miss rather than misattribute to either ply. */
+TEST_F(MCTSTest, FallsBackToFreshRootOnTwoPlyJump)
+{
+    auto [first_move, first_policy] = search.find_best_move_with_policy(engine, 40, false);
+    ASSERT_FALSE(first_policy.empty());
+
+    engine.make_move(first_move);
+    auto opponent_moves = engine.generate_all_moves();
+    ASSERT_FALSE(opponent_moves.empty());
+    engine.make_move(opponent_moves.front());
+
+    auto [second_move, second_policy] = search.find_best_move_with_policy(engine, 40, false);
+    EXPECT_FALSE(search.reused_tree_on_last_search());
+    EXPECT_FALSE(second_policy.empty());
+}
+
+/* A promoted child can itself be a terminal (unexpanded) leaf, e.g. the
+ * move that was just played delivered checkmate -- covered uniformly by
+ * the existing children.empty() early return, same shape as
+ * EmptyChildrenReturnEmptyMove for a freshly-built root. */
+TEST_F(MCTSTest, PromotedTerminalChildReturnsEmptyGracefully)
+{
+    Engine mate_engine("7k/5Q2/5K2/8/8/8/8/8 w - - 0 1");
+    mcts::Tree tree{nullptr, 1, 8};
+
+    auto [first_move, first_policy] = tree.find_best_move_with_policy(mate_engine, 100, false);
+    ASSERT_FALSE(first_policy.empty());
+
+    mate_engine.make_move(chess::Move("f7", "g7"));
+
+    auto [second_move, second_policy] = tree.find_best_move_with_policy(mate_engine, 100, false);
+    EXPECT_TRUE(tree.reused_tree_on_last_search());
+    EXPECT_EQ(second_move.to_uci_notation(), "a1a1");
+    EXPECT_TRUE(second_policy.empty());
+}
+
+/**
+ * Plays several plies from the start position exactly like selfplay.cpp
+ * does -- sampling the actually-played move from the returned policy via
+ * discrete_distribution, not assuming it's the search's own best_move --
+ * with noise reapplied every ply on a tree that's carrying forward
+ * visits/win_score across reused roots. Every returned policy must stay a
+ * well-formed distribution regardless of that carried-forward state.
+ */
+TEST_F(MCTSTest, PolicyStaysWellFormedAcrossReusedNoisedPlies)
+{
+    mcts::Tree tree{nullptr, 1, 4};
+    Engine play_engine;
+    std::mt19937 rng(42);
+
+    for (int ply = 0; ply < 6; ++ply)
+    {
+        auto [best_move, policy] = tree.find_best_move_with_policy(play_engine, 24, true);
+        ASSERT_FALSE(policy.empty()) << "ply " << ply;
+
+        double sum = 0.0;
+        for (const auto &entry : policy)
+        {
+            EXPECT_TRUE(std::isfinite(entry.second));
+            EXPECT_GE(entry.second, 0.0);
+            sum += entry.second;
+        }
+        /* On a promoted root, sum(policy) can fall short of 1.0 by up to
+         * one child's worth of "1 / total_visits" -- see the comment at
+         * find_best_move_with_policy's policy-building loop -- so this
+         * checks a bounded shortfall rather than exact normalization. */
+        EXPECT_LE(sum, 1.0 + 1e-9) << "ply " << ply;
+        EXPECT_GE(sum, 0.9) << "ply " << ply;
+
+        std::vector<double> weights;
+        for (const auto &entry : policy)
+        {
+            weights.push_back(entry.second);
+        }
+        std::discrete_distribution<size_t> dist(weights.begin(), weights.end());
+        chess::Move chosen = policy[dist(rng)].first;
+        play_engine.make_move(chosen);
+
+        if (play_engine.is_checkmate() || play_engine.is_stalemate() || play_engine.is_draw())
+        {
+            break;
+        }
+    }
 }

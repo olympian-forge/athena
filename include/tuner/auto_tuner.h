@@ -25,13 +25,26 @@ namespace tuner
 {
     const std::string BENCHMARK_KIWIPETE_FEN = "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1";
 
-    /* Benchmark cadence. benchmark_search() runs for a wall-clock window, so
-     * one untimed warmup window absorbs one-time costs (cuDNN autotune,
-     * allocator growth) and the timed windows then measure steady state --
-     * previously the first config's timed run silently paid those costs. */
+    /* Benchmark cadence. The timed phase calls find_best_move_with_policy()
+     * -- the exact function self-play calls, once per move -- rather than
+     * benchmark_search()'s continuous wall-clock window. A prior diagnostic
+     * proved why this matters: benchmark_search() run continuously measured
+     * ~16,755 NPS on this codebase's dev A40, but self-play's real measured
+     * throughput sat at ~2,900 NPS -- chopping benchmark_search() itself into
+     * short, self-play-shaped bursts alone reproduced most of that gap
+     * (~4,021 NPS), proving it's the fresh-root/fresh-threads-every-move
+     * restart cost, not anything specific to self-play's own code. Calling
+     * find_best_move_with_policy() directly is the more faithful fix: same
+     * restart cadence, same simulation-count termination, same code path
+     * self-play actually runs, just on the fixed Kiwipete position instead
+     * of a real evolving game (avoiding the long windows a real game's
+     * length variance would otherwise require to average out).
+     *
+     * One untimed warmup window still absorbs one-time costs (cuDNN
+     * autotune, allocator growth) via a single continuous benchmark_search()
+     * call before the timed, per-move-shaped measurement begins. */
     const int BENCHMARK_WARMUP_MS = 2000;
-    const int BENCHMARK_RUN_MS = 5000;
-    const int BENCHMARK_TIMED_RUNS = 2;
+    const int BENCHMARK_TIMED_RUNS = 20;
 
     /* Games/hour projection inputs. 800 simulations/move matches the
      * --selfplay default; 99 plies is the measured average game length over
