@@ -200,8 +200,10 @@ namespace hardware::platform
                 uint64_t quota = std::stoull(quota_str);
                 consider_cpu_limit(limit, (quota + period - 1) / period);
             }
-            catch (const std::exception &)
+            catch (const std::exception &e)
             {
+                std::string what = static_cast<std::string>(e.what());
+                logger::warn("cgroup v2 CPU quota found, but could not be parsed: \"" + quota_str + "\". Exception: " + what);
             }
         }
     }
@@ -233,8 +235,10 @@ namespace hardware::platform
             {
                 consider_memory_limit(limit, std::stoull(value_str));
             }
-            catch (const std::exception &)
+            catch (const std::exception &e)
             {
+                std::string what = static_cast<std::string>(e.what());
+                logger::warn("cgroup v2 memory limit found, but could not be parsed: \"" + value_str + "\". Exception: " + what);
             }
         }
     }

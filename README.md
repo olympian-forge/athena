@@ -453,6 +453,7 @@ rm -rf build                                                        # Clean buil
 
 - **README.md** (this file): User-facing documentation
 - **[ai/AI_CONTEXT.md](ai/AI_CONTEXT.md)**: Technical documentation for AI coding assistants working in this repo — architecture, tools, and the same first-run bootstrap step covered above
+- **[docs/MODEL_CONTRACT.md](docs/MODEL_CONTRACT.md)**: The C++/Python neural network contract — input tensor layout, ONNX tensor names, the 73-plane move encoding, and the self-play JSONL schema
 - **CONTRIBUTORS.md**: Who's worked on this project
 
 ## 🤝 Contributing
